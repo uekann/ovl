@@ -219,10 +219,43 @@ func TestForcePushDoesNotRequireYes(t *testing.T) {
 	}
 }
 
+func TestForcePushDeletesRemoteOnlyFiles(t *testing.T) {
+	_, remote := setupSyncedProject(t, map[string]string{"main.tex": "base\n"})
+	remote.set("remote-only.tex", "remote\n")
+
+	must(t, Run(context.Background(), []string{"push", "--force"}))
+	if got := remote.get("remote-only.tex"); got != "" {
+		t.Fatalf("remote-only file was not deleted: %q", got)
+	}
+}
+
+func TestForcePushDeletesLocallyDeletedFiles(t *testing.T) {
+	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "base\n", "old.tex": "old\n"})
+	must(t, os.Remove(filepath.Join(project, "old.tex")))
+
+	must(t, Run(context.Background(), []string{"push", "--force"}))
+	if got := remote.get("old.tex"); got != "" {
+		t.Fatalf("locally deleted file was not deleted remotely: %q", got)
+	}
+}
+
 func TestCompileDownloadsPDF(t *testing.T) {
 	project, _ := setupSyncedProject(t, map[string]string{"main.tex": "\\documentclass{article}\\begin{document}ok\\end{document}\n"})
 
 	must(t, Run(context.Background(), []string{"compile", "main.tex"}))
+	if got := mustRead(t, filepath.Join(project, "main.pdf")); got != "%PDF fake\n" {
+		t.Fatalf("unexpected pdf content: %q", got)
+	}
+}
+
+func TestCompilePushUploadsBeforeCompile(t *testing.T) {
+	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "base\n"})
+	must(t, os.WriteFile(filepath.Join(project, "main.tex"), []byte("local\n"), 0o644))
+
+	must(t, Run(context.Background(), []string{"compile", "--push", "main.tex"}))
+	if got := remote.get("main.tex"); got != "local\n" {
+		t.Fatalf("compile --push did not upload local change: %q", got)
+	}
 	if got := mustRead(t, filepath.Join(project, "main.pdf")); got != "%PDF fake\n" {
 		t.Fatalf("unexpected pdf content: %q", got)
 	}

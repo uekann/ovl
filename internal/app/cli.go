@@ -51,7 +51,7 @@ Commands:
   ovl pull [--preview] [--force] [--delete-local]
   ovl status [--local-only]
   ovl diff [--remote] [--all]
-  ovl compile [--output <path>] [root.tex]
+  ovl compile [--push] [--output <path>] [root.tex]
   ovl push [--force] [--delete]
   ovl backup-remote
 
@@ -318,16 +318,17 @@ func cmdDiff(ctx context.Context, args []string) error {
 
 func cmdCompile(ctx context.Context, args []string) error {
 	if hasHelp(args) {
-		fmt.Println("usage: ovl compile [--output <path>] [root.tex]")
+		fmt.Println("usage: ovl compile [--push] [--output <path>] [root.tex]")
 		return nil
 	}
 	fs := flag.NewFlagSet("compile", flag.ContinueOnError)
+	push := fs.Bool("push", false, "push local changes before compiling")
 	output := fs.String("output", "", "write PDF to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 1 {
-		return errors.New("usage: ovl compile [--output <path>] [root.tex]")
+		return errors.New("usage: ovl compile [--push] [--output <path>] [root.tex]")
 	}
 	rootDoc := ""
 	if fs.NArg() == 1 {
@@ -336,6 +337,11 @@ func cmdCompile(ctx context.Context, args []string) error {
 	projectRoot, cfg, _, err := loadProject()
 	if err != nil {
 		return err
+	}
+	if *push {
+		if err := cmdPush(ctx, nil); err != nil {
+			return err
+		}
 	}
 	result, err := backendFor(projectRoot, cfg).CompilePDF(ctx, rootDoc)
 	if err != nil {
@@ -404,18 +410,19 @@ func cmdPush(ctx context.Context, args []string) error {
 		fmt.Println("\nRun:\n  ovl diff --remote\n  ovl pull --preview\n  ovl pull")
 		return errors.New("push refused")
 	}
+	shouldDeleteRemote := *deleteRemote || *force
 	if *force {
 		if _, err := backupRemote(root, remote); err != nil {
 			return fmt.Errorf("backup failed; refusing force push: %w", err)
 		}
 	}
-	if *deleteRemote {
+	if *deleteRemote && !*force {
 		if _, err := backupRemote(root, remote); err != nil {
 			return fmt.Errorf("backup failed; refusing delete push: %w", err)
 		}
 	}
 	uploads := pushUploads(state.Files, local, remote, *force)
-	deletes := pushDeletes(state.Files, local, remote, *deleteRemote)
+	deletes := pushDeletes(state.Files, local, remote, *deleteRemote, *force)
 	deleteDirs := pushDeletedDirs(local, remote, deletes)
 	uploadedStates := map[string]FileState{}
 	for _, p := range uploads {
@@ -458,14 +465,14 @@ func cmdPush(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("Pushed %d file(s)", len(uploads))
-	if *deleteRemote {
+	if shouldDeleteRemote {
 		fmt.Printf(", deleted %d remote file(s)", len(deletes))
 		if len(deleteDirs) > 0 {
 			fmt.Printf(", deleted %d remote directory(s)", len(deleteDirs))
 		}
 	}
 	fmt.Println()
-	if !*deleteRemote {
+	if !shouldDeleteRemote {
 		printLocalDeleted(state.Files, local, remote)
 	}
 	return nil

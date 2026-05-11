@@ -162,12 +162,15 @@ Overleaf 側でコンパイルを実行し、生成された PDF をローカル
 ```sh
 ./ovl compile
 ./ovl compile main.tex
+./ovl compile --push main.tex
 ./ovl compile --output build/main.pdf main.tex
 ```
 
 `root.tex` を指定した場合、そのファイルを root document として compile request に渡します。指定しない場合は Overleaf プロジェクトの現在の root document を使います。
 
 出力先を指定しない場合、`root.tex` 指定時は `<rootのbasename>.pdf`、未指定時は `output.pdf` に保存します。例えば `./ovl compile chapters/main.tex` は `main.pdf` を作成します。
+
+`--push` を付けると、コンパイル前に通常の `ovl push` を実行します。remote 変更や conflict がある場合は push と同じく停止し、compile は実行しません。生成される PDF は push 後に保存されるため、その実行で作られた PDF 自体は push 対象になりません。
 
 PDF は生成物なので、新規プロジェクトで作られる `.olignore` には `*.pdf` を含めています。既存プロジェクトで PDF を push 対象にしたくない場合は `.olignore` に `*.pdf` を追加してください。
 
@@ -183,7 +186,7 @@ remote 変更を無視して強制的に上書きするには:
 ./ovl push --force
 ```
 
-`--force` は実行前に remote backup を作成します。
+`--force` は実行前に remote backup を作成します。`--force` では local を正として扱うため、remote にだけ存在するファイルや local で削除済みのファイルも remote から削除します。
 
 ローカルで削除されたファイルは、デフォルトでは remote から削除しません。remote 削除も反映するには:
 

@@ -110,11 +110,20 @@ func pushUploads(base map[string]FileState, local, remote map[string]FileSnapsho
 	return out
 }
 
-func pushDeletes(base map[string]FileState, local, remote map[string]FileSnapshot, enabled bool) []string {
-	if !enabled {
+func pushDeletes(base map[string]FileState, local, remote map[string]FileSnapshot, enabled, force bool) []string {
+	if !enabled && !force {
 		return nil
 	}
 	var out []string
+	if force {
+		for p := range remote {
+			if _, hasLocal := local[p]; !hasLocal {
+				out = append(out, p)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
 	for p := range base {
 		if _, hasLocal := local[p]; hasLocal {
 			continue
