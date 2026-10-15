@@ -92,9 +92,8 @@ func TestBackendPutUploadsWithCSRFAndFolderID(t *testing.T) {
 	}
 }
 
-func TestBackendPutFallsBackToEntitiesAndComputedRoot(t *testing.T) {
+func TestBackendPutReplacesExistingEntityWithoutDeletingIt(t *testing.T) {
 	projectID := "1234567890abcdef00000002"
-	var deleted bool
 	var uploaded bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -105,11 +104,7 @@ func TestBackendPutFallsBackToEntitiesAndComputedRoot(t *testing.T) {
 		case "/project/" + projectID + "/entities":
 			_, _ = io.WriteString(w, `{"entities":[{"path":"main.tex","type":"doc","_id":"doc-id"}]}`)
 		case "/project/" + projectID + "/doc/doc-id":
-			if r.Method != http.MethodDelete {
-				t.Fatalf("method = %s", r.Method)
-			}
-			deleted = true
-			w.WriteHeader(http.StatusNoContent)
+			t.Fatal("existing document was deleted before upload")
 		case "/project/" + projectID + "/upload":
 			uploaded = true
 			if r.URL.Query().Get("folder_id") != "1234567890abcdef00000001" {
@@ -123,10 +118,13 @@ func TestBackendPutFallsBackToEntitiesAndComputedRoot(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	backend := New(server.URL, projectID, "session-value", server.Client())
-	_, err := backend.Put(context.Background(), domain.FileSnapshot{Path: "main.tex", Content: []byte("local\n")})
+	state, err := backend.Put(context.Background(), domain.FileSnapshot{Path: "main.tex", Content: []byte("local\n")})
 	must(t, err)
-	if !deleted || !uploaded {
-		t.Fatalf("deleted=%v uploaded=%v", deleted, uploaded)
+	if !uploaded {
+		t.Fatal("upload endpoint was not called")
+	}
+	if state.RemoteID != "doc:doc-id" {
+		t.Fatalf("RemoteID = %q, want existing document ID", state.RemoteID)
 	}
 }
 
