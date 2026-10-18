@@ -1,0 +1,116 @@
+name: Merge policy
+
+"on":
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+
+# pull_request_target deliberately runs this file from the base branch. Never
+# check out or execute pull request code in this workflow.
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: merge-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Policy required
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Enforce trusted quality gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          pr_context_is_current() {
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" |
+              jq -e --arg base "$BASE_SHA" --arg head "$HEAD_SHA" '
+                .base.sha == $base and .head.sha == $head
+              ' >/dev/null
+          }
+
+          if ! pr_context_is_current; then
+            echo "::error::This workflow event no longer matches the pull request head and base."
+            exit 1
+          fi
+
+          if ! pull_request="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"; then
+            echo "::error::Could not inspect the pull request."
+            exit 1
+          fi
+          if ! changed_files="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" | jq 'add')"; then
+            echo "::error::Could not inspect pull request files."
+            exit 1
+          fi
+
+          expected_file_count="$(jq -r '.changed_files' <<<"$pull_request")"
+          actual_file_count="$(jq -r 'length' <<<"$changed_files")"
+          if [[ "$actual_file_count" != "$expected_file_count" ]]; then
+            echo "::error::GitHub returned $actual_file_count of $expected_file_count changed files; refusing an incomplete policy check."
+            exit 1
+          fi
+
+          if jq -e '
+            any(.[].filename; startswith(".github/workflows/")) or
+            any(.[].previous_filename // ""; startswith(".github/workflows/"))
+          ' <<<"$changed_files" >/dev/null; then
+            echo "::error::This pull request changes GitHub Actions workflows. Workflow changes require an explicit ruleset maintenance operation."
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            if ! runs="$(gh api --paginate --slurp "repos/$REPOSITORY/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" | jq '[.[].workflow_runs[]]')"; then
+              echo "GitHub API request failed; retrying ($attempt/60)."
+              sleep 15
+              continue
+            fi
+
+            ci_title="CI | pull_request | PR #$PR_NUMBER | base $BASE_SHA | head $HEAD_SHA"
+            review_title="LLM review | pull_request | PR #$PR_NUMBER | base $BASE_SHA | head $HEAD_SHA"
+            if jq -e \
+              --arg sha "$HEAD_SHA" \
+              --arg ci_title "$ci_title" \
+              --arg review_title "$review_title" '
+              def latest($path; $title):
+                [
+                  .[] |
+                  select(
+                    (.path == $path or (.path | startswith($path + "@"))) and
+                    .head_sha == $sha and
+                    .event == "pull_request" and
+                    .display_title == $title
+                  )
+                ] | sort_by(.id) | last;
+              (latest(".github/workflows/ci.yml"; $ci_title) |
+                .status == "completed" and .conclusion == "success") and
+              (latest(".github/workflows/review-gate.yml"; $review_title) |
+                .status == "completed" and .conclusion == "success")
+            ' <<<"$runs" >/dev/null; then
+              if ! pr_context_is_current; then
+                echo "::error::The pull request head or base changed while this policy gate was running."
+                exit 1
+              fi
+              echo "Trusted CI and Codex review gates passed for $HEAD_SHA."
+              exit 0
+            fi
+
+            echo "Waiting for trusted quality gates on $HEAD_SHA ($attempt/60)."
+            sleep 15
+          done
+
+          echo "::error::Trusted CI and Codex review gates did not both pass for the current commit."
+          exit 1

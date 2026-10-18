@@ -1,0 +1,70 @@
+name: CI
+run-name: "CI | ${{ github.event_name }} | PR #${{ github.event.pull_request.number || 'none' }} | base ${{ github.event.pull_request.base.sha || 'none' }} | head ${{ github.event.pull_request.head.sha || github.sha }}"
+
+"on":
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+  push:
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  required:
+    name: CI required
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.25.x
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' 'Go files need formatting:' "$unformatted"
+            exit 1
+          fi
+
+      - name: Check module files
+        run: go mod tidy -diff
+
+      - name: Lint
+        run: |
+          go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Build
+        run: go build -trimpath ./...
+
+      - name: Run all tests
+        run: go test -shuffle=on -count=1 ./...
+
+      - name: Run all tests with the race detector
+        run: go test -race -count=1 ./...

@@ -1,0 +1,138 @@
+name: LLM review gate
+run-name: "LLM review | ${{ github.event_name }} | PR #${{ github.event.pull_request.number }} | base ${{ github.event.pull_request.base.sha }} | head ${{ github.event.pull_request.head.sha }}"
+
+"on":
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: llm-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: LLM review required
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for a review of the current commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          pr_context_is_current() {
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" |
+              jq -e --arg base "$BASE_SHA" --arg head "$HEAD_SHA" '
+                .base.sha == $base and .head.sha == $head
+              ' >/dev/null
+          }
+
+          if ! pr_context_is_current; then
+            echo "::error::This workflow event no longer matches the pull request head and base."
+            exit 1
+          fi
+
+          owner="${REPOSITORY%%/*}"
+          repo="${REPOSITORY#*/}"
+          # GraphQL variables must remain literal.
+          # shellcheck disable=SC2016
+          if ! timeline_pages="$(gh api graphql --paginate --slurp \
+            -f owner="$owner" \
+            -f repo="$repo" \
+            -F number="$PR_NUMBER" \
+            -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){
+              repository(owner:$owner,name:$repo){
+                pullRequest(number:$number){
+                  timelineItems(
+                    first:100,
+                    after:$endCursor,
+                    itemTypes:[
+                      PULL_REQUEST_COMMIT,
+                      BASE_REF_CHANGED_EVENT,
+                      AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT
+                    ]
+                  ){
+                    nodes{
+                      __typename
+                      ... on PullRequestCommit{commit{oid}}
+                    }
+                    pageInfo{hasNextPage endCursor}
+                  }
+                }
+              }
+            }')"; then
+            echo "::error::Could not inspect the pull request timeline."
+            exit 1
+          fi
+          timeline="$(jq '[.[].data.repository.pullRequest.timelineItems.nodes[]]' <<<"$timeline_pages")"
+          if ! jq -e --arg sha "$HEAD_SHA" '
+            ([to_entries[] |
+              select(
+                .value.__typename == "BaseRefChangedEvent" or
+                .value.__typename == "AutomaticBaseChangeSucceededEvent"
+              ) |
+              .key] | last // -1) as $base_change |
+            ([to_entries[] |
+              select(
+                .value.__typename == "PullRequestCommit" and
+                .value.commit.oid == $sha
+              ) |
+              .key] | last // -1) as $head_commit |
+            $head_commit > $base_change
+          ' <<<"$timeline" >/dev/null; then
+            echo "::error::The pull request head was not updated after its latest base-branch change. Push a new commit, then request a fresh review."
+            exit 1
+          fi
+
+          for attempt in $(seq 1 40); do
+            if ! codex_comments="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq 'add')"; then
+              echo "GitHub API request failed; retrying ($attempt/40)."
+              sleep 15
+              continue
+            fi
+            if jq -e --arg sha "$HEAD_SHA" '
+              def codex_review:
+                try (
+                  (.body // "")
+                  | capture("<!-- codex-review-state:v1 (?<json>\\{[^\\n]*\\}) -->").json
+                  | fromjson
+                  | .code_review
+                ) catch null;
+              any(.[];
+                (. | codex_review) as $review |
+                .user.login == "chatgpt-codex-connector[bot]" and
+                $review != null and
+                $review.commit_sha == $sha and
+                $review.status == "completed" and
+                $review.has_unresolved_findings == false
+              )
+            ' <<<"$codex_comments" >/dev/null; then
+              if ! pr_context_is_current; then
+                echo "::error::The pull request head or base changed while this review gate was running."
+                exit 1
+              fi
+              echo "OpenAI Codex completed a review of $HEAD_SHA."
+              exit 0
+            fi
+
+            echo "Waiting for an OpenAI Codex review of $HEAD_SHA ($attempt/40)."
+            sleep 15
+          done
+
+          echo "::error::No completed OpenAI Codex review without unresolved findings was found for the current commit. Request or complete a review, then re-run this job."
+          exit 1
