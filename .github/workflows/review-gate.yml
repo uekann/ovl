@@ -58,25 +58,9 @@ jobs:
               exit 0
             fi
 
-            if ! copilot_reviews="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" | jq 'add')"; then
-              echo "GitHub API request failed; retrying ($attempt/40)."
-              sleep 15
-              continue
-            fi
-            if jq -e --arg sha "$HEAD_SHA" '
-              any(.[];
-                .user.login == "copilot-pull-request-reviewer[bot]" and
-                .commit_id == $sha and
-                (((.body // "") | test("unable to review|wasn.t able to review|could not review|couldn.t review|failed to review|quota limit"; "i")) | not)
-              )
-            ' <<<"$copilot_reviews" >/dev/null; then
-              echo "GitHub Copilot completed a review of $HEAD_SHA."
-              exit 0
-            fi
-
-            echo "Waiting for an LLM review of $HEAD_SHA ($attempt/40)."
+            echo "Waiting for an OpenAI Codex review of $HEAD_SHA ($attempt/40)."
             sleep 15
           done
 
-          echo "::error::No completed Codex or Copilot review was found for the current commit. Request a review, then re-run this job."
+          echo "::error::No completed OpenAI Codex review was found for the current commit. Request a review with '@codex review', then re-run this job."
           exit 1

@@ -30,11 +30,14 @@ Staticcheckは、最低対応バージョンであるGo 1.25で動作する `v0.
 - pull requestを経由する
 - `CI required` が成功する
 - 現在のcommitに対する `LLM review required` が成功する
+- main側の変更されていない定義で動く `Policy required` が成功する
 - pull request branchが最新の`main`を取り込んでいる
 - review conversationがすべて解決されている
 - force pushとbranch削除を許可しない
 
 単独開発でも自分のpull requestを進められるよう、人間による承認数は0とします。フォーマット、リント、ビルド、通常テスト、race detector付きテストのどれか1つでも失敗すれば、`CI required` は成功せずマージできません。
+
+`.github/workflows/policy-gate.yml` は `pull_request_target` でmain側のworkflow定義を使い、PRのコードをcheckoutも実行もせず、現在のHEADに対する正規のCIとCodex review workflowが成功したことを確認します。検査の自己無効化や同名checkの追加を防ぐため、通常のPRから `.github/workflows/` 以下を変更することも拒否します。repositoryのActions policy `Allow trusted merge policy` は、この読み取り専用workflowに限って `pull_request_target` eventを明示的に許可します。workflowを保守するときは、repository管理者がrulesetの `Policy required` を一時的に外し、変更をレビュー・検証した後、再び必須にしてください。
 
 ## LLMによるレビュー
 
@@ -50,6 +53,6 @@ ChatGPT Proの利用枠でOpenAI Codexのレビューも利用できます。初
 
 Codexはrootの`AGENTS.md`にある `## Code Review Rules` を読み、ovl固有の重大リスクを重点的に確認します。機械的に判定できる事項はCIへ置き、LLMにはOverleaf上のentity identity、同期時のデータ保護、コメント位置、credentialやprivate APIの扱いをレビューさせています。
 
-`.github/workflows/review-gate.yml` は、現在のpull request HEADに対する内容のあるCopilotレビュー、または完了したCodexレビューが返るまで待機します。Copilotのquota超過通知はレビュー完了として扱いません。10分以内にレビューが完了しなかった場合は失敗するため、レビューを依頼してからjobを再実行してください。rulesetで `LLM review required` も必須にするため、古いcommitへのレビューだけではマージできません。
+`.github/workflows/review-gate.yml` は、現在のpull request HEADに対するCodexの機械可読な完了状態が返るまで待機します。Copilot reviewは追加の助言として利用しますが、quota超過や応答形式の変化をレビュー完了と誤認しないよう、必須ゲートの判定には使いません。10分以内にCodex reviewが完了しなかった場合は失敗するため、レビューを依頼してからjobを再実行してください。rulesetで `LLM review required` も必須にするため、古いcommitへのレビューだけではマージできません。
 
 `openai/codex-action` をworkflow内で直接実行する方法もありますが、GitHub secretに `OPENAI_API_KEY` が必要で、ChatGPT Proとは別のAPI課金になります。このリポジトリでは、API keyを公開repositoryのpull request workflowへ持ち込まずに済むGitHub連携を標準とします。
