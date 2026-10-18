@@ -55,7 +55,10 @@ jobs:
           fi
           if ! jq -e --arg sha "$HEAD_SHA" '
             ([to_entries[] |
-              select(.value.event == "base_ref_changed") |
+              select(
+                .value.event == "base_ref_changed" or
+                .value.event == "automatic_base_change_succeeded"
+              ) |
               .key] | last // -1) as $base_change |
             ([to_entries[] |
               select(.value.event == "committed" and .value.sha == $sha) |
