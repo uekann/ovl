@@ -34,6 +34,7 @@ func TestHelpFlags(t *testing.T) {
 	must(t, Run(context.Background(), []string{"--help"}))
 	must(t, Run(context.Background(), []string{"auth", "--help"}))
 	must(t, Run(context.Background(), []string{"push", "--help"}))
+	must(t, Run(context.Background(), []string{"comments", "--help"}))
 }
 
 func TestPushUploadsLocalOnlyChange(t *testing.T) {

@@ -37,6 +37,10 @@ func (b errorBackend) List(context.Context) (map[string]FileSnapshot, error) {
 	return nil, b.err
 }
 
+func (b errorBackend) ListComments(context.Context) ([]CommentThread, error) {
+	return nil, b.err
+}
+
 func (b errorBackend) Put(context.Context, FileSnapshot) (FileState, error) {
 	return FileState{}, b.err
 }

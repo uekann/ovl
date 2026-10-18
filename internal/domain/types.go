@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 const MetaDir = ".overleaf-sync"
 
 type Config struct {
@@ -35,4 +37,32 @@ type FileSnapshot struct {
 type CompileResult struct {
 	PDF    []byte
 	Status string
+}
+
+type CommentThread struct {
+	ID         string           `json:"id"`
+	Resolved   bool             `json:"resolved"`
+	ResolvedAt *time.Time       `json:"resolved_at,omitempty"`
+	Anchor     *CommentAnchor   `json:"anchor,omitempty"`
+	Messages   []CommentMessage `json:"messages"`
+}
+
+type CommentAnchor struct {
+	DocumentID string `json:"document_id,omitempty"`
+	Path       string `json:"path"`
+	Offset     int    `json:"offset"`
+	Text       string `json:"text"`
+}
+
+type CommentMessage struct {
+	ID        string        `json:"id"`
+	Content   string        `json:"content"`
+	Timestamp *time.Time    `json:"timestamp,omitempty"`
+	Author    CommentAuthor `json:"author"`
+}
+
+type CommentAuthor struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
 }

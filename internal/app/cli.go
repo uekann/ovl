@@ -33,6 +33,8 @@ func Run(ctx context.Context, args []string) error {
 		return cmdDiff(ctx, args[1:])
 	case "compile":
 		return cmdCompile(ctx, args[1:])
+	case "comments":
+		return cmdComments(ctx, args[1:])
 	case "push":
 		return cmdPush(ctx, args[1:])
 	case "backup-remote":
@@ -52,6 +54,7 @@ Commands:
   ovl status [--local-only]
   ovl diff [--remote] [--all]
   ovl compile [--push] [--output <path>] [root.tex]
+  ovl comments [--include-resolved] [--json]
   ovl push [--force] [--delete]
   ovl backup-remote
 
@@ -374,6 +377,31 @@ func defaultPDFOutputPath(rootDoc string) string {
 		return base + ".pdf"
 	}
 	return strings.TrimSuffix(base, ext) + ".pdf"
+}
+
+func cmdComments(ctx context.Context, args []string) error {
+	if hasHelp(args) {
+		fmt.Println("usage: ovl comments [--include-resolved] [--json]")
+		return nil
+	}
+	fs := flag.NewFlagSet("comments", flag.ContinueOnError)
+	includeResolved := fs.Bool("include-resolved", false, "include resolved comment threads")
+	asJSON := fs.Bool("json", false, "print comments as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: ovl comments [--include-resolved] [--json]")
+	}
+	root, cfg, _, err := loadProject()
+	if err != nil {
+		return err
+	}
+	comments, err := backendFor(root, cfg).ListComments(ctx)
+	if err != nil {
+		return err
+	}
+	return writeComments(os.Stdout, filterComments(comments, *includeResolved), *asJSON)
 }
 
 func cmdPush(ctx context.Context, args []string) error {
