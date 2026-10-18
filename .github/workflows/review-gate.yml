@@ -1,4 +1,5 @@
 name: LLM review gate
+run-name: "LLM review | ${{ github.event_name }} | PR #${{ github.event.pull_request.number }} | base ${{ github.event.pull_request.base.sha }} | head ${{ github.event.pull_request.head.sha }}"
 
 "on":
   pull_request:
@@ -31,6 +32,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
+          REVIEW_NOT_BEFORE: ${{ github.event.pull_request.updated_at }}
         shell: bash
         run: |
           for attempt in $(seq 1 40); do
@@ -39,7 +41,7 @@ jobs:
               sleep 15
               continue
             fi
-            if jq -e --arg sha "$HEAD_SHA" '
+            if jq -e --arg sha "$HEAD_SHA" --arg not_before "$REVIEW_NOT_BEFORE" '
               def codex_review:
                 try (
                   (.body // "")
@@ -53,7 +55,8 @@ jobs:
                 $review != null and
                 $review.commit_sha == $sha and
                 $review.status == "completed" and
-                $review.has_unresolved_findings == false
+                $review.has_unresolved_findings == false and
+                (.updated_at | fromdateiso8601) >= ($not_before | fromdateiso8601)
               )
             ' <<<"$codex_comments" >/dev/null; then
               echo "OpenAI Codex completed a review of $HEAD_SHA."

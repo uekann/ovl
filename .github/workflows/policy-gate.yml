@@ -30,6 +30,7 @@ jobs:
       - name: Enforce trusted quality gates
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
@@ -66,20 +67,25 @@ jobs:
               continue
             fi
 
-            if jq -e --arg sha "$HEAD_SHA" --argjson pr "$PR_NUMBER" '
-              def latest($path):
+            ci_title="CI | pull_request | PR #$PR_NUMBER | base $BASE_SHA | head $HEAD_SHA"
+            review_title="LLM review | pull_request | PR #$PR_NUMBER | base $BASE_SHA | head $HEAD_SHA"
+            if jq -e \
+              --arg sha "$HEAD_SHA" \
+              --arg ci_title "$ci_title" \
+              --arg review_title "$review_title" '
+              def latest($path; $title):
                 [
                   .[] |
                   select(
                     (.path == $path or (.path | startswith($path + "@"))) and
                     .head_sha == $sha and
                     .event == "pull_request" and
-                    any(.pull_requests[]?; .number == $pr)
+                    .display_title == $title
                   )
                 ] | sort_by(.id) | last;
-              (latest(".github/workflows/ci.yml") |
+              (latest(".github/workflows/ci.yml"; $ci_title) |
                 .status == "completed" and .conclusion == "success") and
-              (latest(".github/workflows/review-gate.yml") |
+              (latest(".github/workflows/review-gate.yml"; $review_title) |
                 .status == "completed" and .conclusion == "success")
             ' <<<"$runs" >/dev/null; then
               echo "Trusted CI and Codex review gates passed for $HEAD_SHA."
