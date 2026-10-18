@@ -59,6 +59,16 @@ go build -o ovl .
 ./ovl --help
 ```
 
+## 開発
+
+フォーマット、リント、ビルド、全テストをローカルでまとめて確認できます。
+
+```sh
+make check
+```
+
+Pull requestでは同じ検査をGitHub Actionsの必須チェックとして実行します。開発手順、マージ条件、Codexによるレビュー設定は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+
 ## 認証
 
 `ovl` は Overleaf のセッション cookie で認証します。Overleaf のパスワードは保存しません。

@@ -85,17 +85,6 @@ func readCookieInteractive() (string, error) {
 	}
 	return cookie, nil
 }
-func cookieHeader(cookie string) string {
-	cookie = strings.TrimSpace(cookie)
-	if cookie == "" {
-		return ""
-	}
-	if strings.Contains(cookie, "=") {
-		return cookie
-	}
-	return "overleaf_session2=" + cookie
-}
-
 func defaultIgnore() string {
 	return `.git/
 .gitignore

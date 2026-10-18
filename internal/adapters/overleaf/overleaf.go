@@ -726,15 +726,6 @@ func (b *overleafBackend) projectInfoFromLegacyWebSocket(ctx context.Context, so
 	return projectInfo{}, errors.New("websocket joinProjectResponse not found")
 }
 
-func (b *overleafBackend) legacyJoinProjectPacket() string {
-	payload := map[string]any{
-		"name": "joinProject",
-		"args": []map[string]string{{"project_id": b.projectID}},
-	}
-	body, _ := json.Marshal(payload)
-	return "5:::" + string(body)
-}
-
 func (b *overleafBackend) legacySocketPostVariants(ctx context.Context, socketBase, socketResource, sid, packet string) error {
 	var firstErr error
 	payloads := []string{packet, encodeLegacySocketPayload(packet)}
