@@ -49,6 +49,7 @@ jobs:
 
           owner="${REPOSITORY%%/*}"
           repo="${REPOSITORY#*/}"
+          # shellcheck disable=SC2016 -- GraphQL variables must remain literal.
           if ! timeline_pages="$(gh api graphql --paginate --slurp \
             -f owner="$owner" \
             -f repo="$repo" \
