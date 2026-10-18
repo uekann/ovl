@@ -67,7 +67,7 @@ jobs:
               any(.[];
                 .user.login == "copilot-pull-request-reviewer[bot]" and
                 .commit_id == $sha and
-                (((.body // "") | test("unable to review|quota limit"; "i")) | not)
+                (((.body // "") | test("unable to review|wasn.t able to review|could not review|couldn.t review|failed to review|quota limit"; "i")) | not)
               )
             ' <<<"$copilot_reviews" >/dev/null; then
               echo "GitHub Copilot completed a review of $HEAD_SHA."
