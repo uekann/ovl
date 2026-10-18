@@ -8,19 +8,54 @@ import (
 	"time"
 )
 
-func TestFilterCommentsExcludesResolvedByDefault(t *testing.T) {
+func TestFilterCommentsTreatsResolvedAndUnanchoredIndependently(t *testing.T) {
 	comments := []CommentThread{
-		{ID: "open"},
-		{ID: "resolved", Resolved: true},
+		{ID: "open-anchored", Anchor: &CommentAnchor{Path: "main.tex"}},
+		{ID: "open-unanchored"},
+		{ID: "resolved-anchored", Resolved: true, Anchor: &CommentAnchor{Path: "main.tex"}},
+		{ID: "resolved-unanchored", Resolved: true, Anchor: &CommentAnchor{DocumentID: "old-doc"}},
 	}
 
-	got := filterComments(comments, false)
-	if len(got) != 1 || got[0].ID != "open" {
-		t.Fatalf("filtered comments = %#v", got)
+	tests := []struct {
+		name              string
+		includeResolved   bool
+		includeUnanchored bool
+		want              []string
+	}{
+		{name: "default", want: []string{"open-anchored"}},
+		{name: "resolved", includeResolved: true, want: []string{"open-anchored", "resolved-anchored"}},
+		{name: "unanchored", includeUnanchored: true, want: []string{"open-anchored", "open-unanchored"}},
+		{name: "all", includeResolved: true, includeUnanchored: true, want: []string{"open-anchored", "open-unanchored", "resolved-anchored", "resolved-unanchored"}},
 	}
-	got = filterComments(comments, true)
-	if len(got) != 2 {
-		t.Fatalf("comments including resolved = %#v", got)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := filterComments(comments, test.includeResolved, test.includeUnanchored)
+			if len(got) != len(test.want) {
+				t.Fatalf("filtered comments = %#v", got)
+			}
+			for i, id := range test.want {
+				if got[i].ID != id {
+					t.Fatalf("comments[%d].ID = %q, want %q", i, got[i].ID, id)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterCommentsByLocationExcludesUnverifiedRangesByDefault(t *testing.T) {
+	comments := []CommentThread{
+		{ID: "located", Anchor: &CommentAnchor{Path: "main.tex", Line: 4}},
+		{ID: "stale-range", Anchor: &CommentAnchor{Path: "main.tex"}},
+		{ID: "missing-document"},
+	}
+
+	got := filterCommentsByLocation(comments, false)
+	if len(got) != 1 || got[0].ID != "located" {
+		t.Fatalf("located comments = %#v", got)
+	}
+	got = filterCommentsByLocation(comments, true)
+	if len(got) != len(comments) {
+		t.Fatalf("comments including unanchored = %#v", got)
 	}
 }
 
@@ -38,7 +73,7 @@ func TestWriteCommentsHumanReadable(t *testing.T) {
 		},
 		{
 			ID:     "thread-with-anchor",
-			Anchor: &CommentAnchor{Path: "main.tex", Offset: 104, Text: "first\nsecond"},
+			Anchor: &CommentAnchor{Path: "main.tex", OffsetUTF16: 104, Text: "selected", Line: 2, Column: 6, EndLine: 2, EndColumn: 14},
 			Messages: []CommentMessage{{
 				Content:   "Please use your\nfull name.",
 				Timestamp: &timestamp,
@@ -46,15 +81,23 @@ func TestWriteCommentsHumanReadable(t *testing.T) {
 			}},
 		},
 	}
+	snippets := map[string]commentSnippet{
+		"thread-with-anchor": {Lines: []commentSnippetLine{
+			{Number: 1, Text: "before"},
+			{Number: 2, Text: "text selected here", Selected: true, SelectionStart: 5, SelectionEnd: 13, OpensSelection: true, ClosesSelection: true},
+			{Number: 3, Text: "after"},
+		}},
+	}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, false); err != nil {
+	if err := writeComments(&out, comments, snippets, false); err != nil {
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"[open] main.tex (offset 104, thread thread-with-anchor)",
-		"  selected: first",
-		"            second",
+		"[open] main.tex:2:6 (thread thread-with-anchor)",
+		"    1 | before",
+		"  > 2 | text ⟦selected⟧ here",
+		"    3 | after",
 		"  Reviewer <reviewer@example.com> — 2026-10-15T08:27:38Z",
 		"    Please use your",
 		"    full name.",
@@ -76,7 +119,7 @@ func TestWriteCommentsJSONIsIndentedAndSorted(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, true); err != nil {
+	if err := writeComments(&out, comments, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(out.String(), "[\n  {") {
@@ -96,10 +139,14 @@ func TestWriteCommentsJSONContract(t *testing.T) {
 	comments := []CommentThread{{
 		ID: "thread-id",
 		Anchor: &CommentAnchor{
-			DocumentID: "document-id",
-			Path:       "main.tex",
-			Offset:     7,
-			Text:       "selected text",
+			DocumentID:  "document-id",
+			Path:        "main.tex",
+			OffsetUTF16: 7,
+			Text:        "selected text",
+			Line:        3,
+			Column:      4,
+			EndLine:     3,
+			EndColumn:   17,
 		},
 		Messages: []CommentMessage{{
 			ID:        "message-id",
@@ -110,7 +157,7 @@ func TestWriteCommentsJSONContract(t *testing.T) {
 	}}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, true); err != nil {
+	if err := writeComments(&out, comments, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	want := `[
@@ -120,8 +167,12 @@ func TestWriteCommentsJSONContract(t *testing.T) {
     "anchor": {
       "document_id": "document-id",
       "path": "main.tex",
-      "offset": 7,
-      "text": "selected text"
+      "offset_utf16": 7,
+      "text": "selected text",
+      "line": 3,
+      "column": 4,
+      "end_line": 3,
+      "end_column": 17
     },
     "messages": [
       {
@@ -144,7 +195,7 @@ func TestWriteCommentsJSONContract(t *testing.T) {
 
 func TestWriteCommentsJSONEmptyIsArray(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeComments(&out, []CommentThread{}, true); err != nil {
+	if err := writeComments(&out, []CommentThread{}, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != "[]\n" {
@@ -154,7 +205,7 @@ func TestWriteCommentsJSONEmptyIsArray(t *testing.T) {
 
 func TestWriteCommentsEmpty(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeComments(&out, nil, false); err != nil {
+	if err := writeComments(&out, nil, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != "No comments.\n" {

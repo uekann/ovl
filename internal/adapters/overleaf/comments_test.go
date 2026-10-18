@@ -45,7 +45,7 @@ func TestBackendListCommentsJoinsThreadsRangesAndProjectTree(t *testing.T) {
 	if anchored.ID != "anchored" || anchored.Resolved {
 		t.Fatalf("anchored thread = %#v", anchored)
 	}
-	if anchored.Anchor == nil || anchored.Anchor.Path != "chapters/main.tex" || anchored.Anchor.Offset != 42 || anchored.Anchor.Text != "ambiguous phrase" {
+	if anchored.Anchor == nil || anchored.Anchor.Path != "chapters/main.tex" || anchored.Anchor.OffsetUTF16 != 42 || anchored.Anchor.Text != "ambiguous phrase" {
 		t.Fatalf("anchor = %#v", anchored.Anchor)
 	}
 	if len(anchored.Messages) != 1 {

@@ -199,9 +199,9 @@ ovl diff --all
 
 テキストファイルは行単位の unified diff として表示します。変更のない行は前後の context だけを表示します。バイナリファイルは hash と size の要約を表示します。
 
-### `ovl comments [--include-resolved] [--json]`
+### `ovl comments [--include-resolved] [--include-unanchored] [--json]`
 
-Overleaf 上でプロジェクトに付けられたコメントを取得して表示します。デフォルトでは、未解決のコメントだけを表示します。
+Overleaf 上でプロジェクトに付けられたコメントを取得して表示します。デフォルトでは、未解決かつ現在のファイル内に対象箇所が残っているコメントだけを表示します。
 
 ```sh
 ovl comments
@@ -213,16 +213,32 @@ ovl comments
 ovl comments --include-resolved
 ```
 
+削除済みファイルなどに付いていて、現在の Overleaf 画面から対象箇所を確認できないコメントも表示するには `--include-unanchored` を指定します。解決済みかどうかと、対象箇所が現在も存在するかは独立して判定されるため、両方を含める場合は2つのオプションを組み合わせます。
+
+```sh
+ovl comments --include-unanchored
+ovl comments --include-resolved --include-unanchored
+```
+
 スクリプトなどから扱いやすい JSON 形式で出力するには `--json` を指定します。オプションは組み合わせて使用できます。
 
 ```sh
 ovl comments --json
-ovl comments --include-resolved --json
+ovl comments --include-resolved --include-unanchored --json
 ```
 
-各コメントには、取得できる場合は対象ファイル、文字オフセット、選択されたテキストも表示されます。表示対象になったコメントは、編集によって参照範囲が失われていても省略せず、位置情報を取得できないコメントとして表示します。位置を失った解決済みコメントも確認する場合は `--include-resolved` を指定してください。
+対象箇所を現在の文書内容と照合できた場合は、1始まりの行・列と前後の行を表示します。`⟦` と `⟧` で囲まれた部分がコメントの対象です。
 
-コメント本文を取得できても、Overleaf 側のプロジェクト履歴方式や非公開 endpoint の変更によって文書内の位置を取得できない場合があります。その場合もコメント本文は表示し、位置だけを `anchor unavailable` として扱います。
+```text
+[open] main.tex:12:8 (thread ...)
+    11 | Previous line
+  > 12 | Text with ⟦the reviewed phrase⟧ here.
+    13 | Next line
+```
+
+JSON の `offset_utf16` は Overleaf から取得した0始まりの UTF-16 オフセットです。`line`、`column`、`end_line`、`end_column` は現在の文書との完全一致を確認できた場合だけ出力され、行・列は1始まり、列はUnicode文字単位です。
+
+コメント本文を取得できても、Overleaf 側のプロジェクト履歴方式や非公開 endpoint の変更によって文書内の位置を取得できない場合があります。そのようなコメントはデフォルトでは表示せず、`--include-unanchored` を指定した場合に `anchor unavailable` として表示します。
 
 ### `ovl compile`
 

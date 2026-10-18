@@ -152,10 +152,10 @@ func (b *overleafBackend) ListComments(ctx context.Context) ([]domain.CommentThr
 				continue
 			}
 			anchor := &domain.CommentAnchor{
-				DocumentID: document.ID,
-				Path:       path,
-				Offset:     *commentRange.Op.Position,
-				Text:       commentRange.Op.Content,
+				DocumentID:  document.ID,
+				Path:        path,
+				OffsetUTF16: *commentRange.Op.Position,
+				Text:        commentRange.Op.Content,
 			}
 			if thread.Anchor == nil || commentAnchorLess(anchor, thread.Anchor) {
 				thread.Anchor = anchor
@@ -188,8 +188,8 @@ func (b *overleafBackend) ListComments(ctx context.Context) ([]domain.CommentThr
 		if left.Anchor.DocumentID != right.Anchor.DocumentID {
 			return left.Anchor.DocumentID < right.Anchor.DocumentID
 		}
-		if left.Anchor.Offset != right.Anchor.Offset {
-			return left.Anchor.Offset < right.Anchor.Offset
+		if left.Anchor.OffsetUTF16 != right.Anchor.OffsetUTF16 {
+			return left.Anchor.OffsetUTF16 < right.Anchor.OffsetUTF16
 		}
 		return left.ID < right.ID
 	})
@@ -314,8 +314,8 @@ func commentAnchorLess(left, right *domain.CommentAnchor) bool {
 	if left.DocumentID != right.DocumentID {
 		return left.DocumentID < right.DocumentID
 	}
-	if left.Offset != right.Offset {
-		return left.Offset < right.Offset
+	if left.OffsetUTF16 != right.OffsetUTF16 {
+		return left.OffsetUTF16 < right.OffsetUTF16
 	}
 	return left.Text < right.Text
 }

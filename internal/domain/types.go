@@ -48,10 +48,14 @@ type CommentThread struct {
 }
 
 type CommentAnchor struct {
-	DocumentID string `json:"document_id,omitempty"`
-	Path       string `json:"path"`
-	Offset     int    `json:"offset"`
-	Text       string `json:"text"`
+	DocumentID  string `json:"document_id,omitempty"`
+	Path        string `json:"path"`
+	OffsetUTF16 int    `json:"offset_utf16"`
+	Text        string `json:"text"`
+	Line        int    `json:"line,omitempty"`
+	Column      int    `json:"column,omitempty"`
+	EndLine     int    `json:"end_line,omitempty"`
+	EndColumn   int    `json:"end_column,omitempty"`
 }
 
 type CommentMessage struct {

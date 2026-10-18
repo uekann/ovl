@@ -54,7 +54,7 @@ Commands:
   ovl status [--local-only]
   ovl diff [--remote] [--all]
   ovl compile [--push] [--output <path>] [root.tex]
-  ovl comments [--include-resolved] [--json]
+  ovl comments [--include-resolved] [--include-unanchored] [--json]
   ovl push [--force] [--delete]
   ovl backup-remote
 
@@ -381,27 +381,40 @@ func defaultPDFOutputPath(rootDoc string) string {
 
 func cmdComments(ctx context.Context, args []string) error {
 	if hasHelp(args) {
-		fmt.Println("usage: ovl comments [--include-resolved] [--json]")
+		fmt.Println("usage: ovl comments [--include-resolved] [--include-unanchored] [--json]")
 		return nil
 	}
 	fs := flag.NewFlagSet("comments", flag.ContinueOnError)
 	includeResolved := fs.Bool("include-resolved", false, "include resolved comment threads")
+	includeUnanchored := fs.Bool("include-unanchored", false, "include threads that cannot be located in the current project")
 	asJSON := fs.Bool("json", false, "print comments as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: ovl comments [--include-resolved] [--json]")
+		return errors.New("usage: ovl comments [--include-resolved] [--include-unanchored] [--json]")
 	}
 	root, cfg, _, err := loadProject()
 	if err != nil {
 		return err
 	}
-	comments, err := backendFor(root, cfg).ListComments(ctx)
+	backend := backendFor(root, cfg)
+	comments, err := backend.ListComments(ctx)
 	if err != nil {
 		return err
 	}
-	return writeComments(os.Stdout, filterComments(comments, *includeResolved), *asJSON)
+	comments = filterComments(comments, *includeResolved, *includeUnanchored)
+	snippets := map[string]commentSnippet{}
+	if hasAnchoredComment(comments) {
+		remote, listErr := backend.List(ctx)
+		if listErr == nil {
+			comments, snippets = enrichCommentLocations(comments, remote)
+			comments = filterCommentsByLocation(comments, *includeUnanchored)
+		} else if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
+	return writeComments(os.Stdout, comments, snippets, *asJSON)
 }
 
 func cmdPush(ctx context.Context, args []string) error {
