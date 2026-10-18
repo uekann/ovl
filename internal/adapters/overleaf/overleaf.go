@@ -162,11 +162,10 @@ func (b *overleafBackend) Put(ctx context.Context, snap domain.FileSnapshot) (do
 	if err != nil {
 		return domain.FileState{}, err
 	}
-	if existing, ok := lookup.Entities[snap.Path]; ok {
-		if err := b.deleteEntity(ctx, existing.ID, existing.Type); err != nil {
-			return domain.FileState{}, err
-		}
-	}
+	// Overleaf's upload endpoint upserts an entity with the same folder and name.
+	// In particular, it updates an existing doc in place and records an OT diff;
+	// deleting it first would sever its history and review context.
+	existing, hadExisting := lookup.Entities[snap.Path]
 	folderID, remoteDirs, err := b.ensureFolder(ctx, info, snap.Path)
 	if err != nil {
 		return domain.FileState{}, err
@@ -216,8 +215,12 @@ func (b *overleafBackend) Put(ctx context.Context, snap domain.FileSnapshot) (do
 	if len(respBody) > 0 && json.Unmarshal(respBody, &result) == nil && !result.Success {
 		return domain.FileState{}, fmt.Errorf("upload %s failed: %s", snap.Path, trimBody(respBody))
 	}
+	remoteStateID := remoteID(result.EntityType, result.EntityID)
+	if remoteStateID == "" && hadExisting {
+		remoteStateID = remoteID(existing.Type, existing.ID)
+	}
 	return domain.FileState{
-		RemoteID:  remoteID(result.EntityType, result.EntityID),
+		RemoteID:  remoteStateID,
 		RemoteDir: remoteDirs,
 		Type:      snap.Type,
 		SHA256:    snap.SHA256,

@@ -44,6 +44,9 @@ func TestPushUploadsLocalOnlyChange(t *testing.T) {
 	if got := remote.get("main.tex"); got != "local\n" {
 		t.Fatalf("remote not updated: %q", got)
 	}
+	if got := remote.deleteCount(); got != 0 {
+		t.Fatalf("existing document was deleted %d time(s) before upload", got)
+	}
 }
 
 func TestPushDeleteRemovesRemoteFile(t *testing.T) {
@@ -366,6 +369,7 @@ type fakeOverleaf struct {
 	folders       map[string]bool
 	ignoreDeletes bool
 	hideEntities  bool
+	deleteCalls   int
 }
 
 func setupSyncedProject(t *testing.T, files map[string]string) (string, *fakeOverleaf) {
@@ -414,6 +418,12 @@ func (f *fakeOverleaf) folderExists(path string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.folders[path]
+}
+
+func (f *fakeOverleaf) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleteCalls
 }
 
 func (f *fakeOverleaf) createFolder(path string) {
@@ -592,6 +602,7 @@ func (f *fakeOverleaf) entities() []map[string]string {
 func (f *fakeOverleaf) deleteByID(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.deleteCalls++
 	if f.ignoreDeletes {
 		return
 	}
