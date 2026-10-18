@@ -10,10 +10,53 @@
 
 内部構造と同期モデルは `INTERNALS.md` にまとめています。現在は clean architecture へ移行中で、domain、port、application、Overleaf adapter を package として分離済みです。
 
-## ビルド
+## インストール
+
+### 必要環境
+
+- Git
+- Go 1.25.0 以上
+
+Go のバージョンは次のコマンドで確認できます。
 
 ```sh
-go build -o ovl
+go version
+```
+
+リポジトリを clone し、そのルートディレクトリで `go install` を実行します。
+
+```sh
+git clone https://github.com/uekann/ovl.git
+cd ovl
+go install .
+```
+
+`go install .` は `ovl` をビルドし、Go の実行ファイル用ディレクトリへインストールします。`GOBIN` が設定されている場合は `$GOBIN/ovl`、未設定の場合は `GOPATH` の先頭ディレクトリにある `bin/ovl`（通常は `$GOPATH/bin/ovl`）に配置されます。`GOPATH` も設定していない通常の構成では、保存先は `$HOME/go/bin/ovl` です。
+
+現在の設定は次のコマンドで確認できます。
+
+```sh
+go env GOBIN
+go env GOPATH
+```
+
+インストール先が `PATH` に含まれていない場合は追加してください。標準設定では、例えば次の行を `~/.profile` や `~/.zshrc` に追加します。
+
+```sh
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+独自の `GOBIN` を設定している場合は、代わりにそのディレクトリを `PATH` に追加してください。インストール後、任意のディレクトリで動作を確認できます。
+
+```sh
+ovl --help
+```
+
+インストールせず、clone したリポジトリ内だけでビルドすることもできます。
+
+```sh
+go build -o ovl .
+./ovl --help
 ```
 
 ## 認証
@@ -23,7 +66,7 @@ go build -o ovl
 デフォルトでは、cookie は現在のプロジェクト内の `.overleaf-sync/auth/cookie` に `0600` 権限で保存されます。Cookie はコマンド引数では渡さず、対話入力します。端末から実行している場合、入力は画面に表示されません。
 
 ```sh
-./ovl auth
+ovl auth
 ```
 
 入力する値は、`overleaf_session2=...` の形式でも cookie 値だけでも構いません。
@@ -39,7 +82,7 @@ go build -o ovl
 任意のファイルに保存し、そのプロジェクトで使うよう設定することもできます。
 
 ```sh
-./ovl auth --file ../ovl-cookie
+ovl auth --file ../ovl-cookie
 ```
 
 環境変数でも指定できます。環境変数はプロジェクト local の cookie より優先されます。
@@ -54,14 +97,14 @@ cookie が未設定のまま `init`、`pull`、`push` など remote へアクセ
 help を表示するには:
 
 ```sh
-./ovl --help
-./ovl push --help
+ovl --help
+ovl push --help
 ```
 
 self-hosted Overleaf や Server Pro を使う場合:
 
 ```sh
-./ovl init --host https://overleaf.example.com <project-id>
+ovl init --host https://overleaf.example.com <project-id>
 ```
 
 ## クイックスタート
@@ -69,12 +112,13 @@ self-hosted Overleaf や Server Pro を使う場合:
 ローカルプロジェクトディレクトリで実行します。
 
 ```sh
-./ovl auth
-./ovl init <project-id>
-./ovl pull
-./ovl status
-./ovl compile main.tex
-./ovl push
+ovl auth
+ovl init <project-id>
+ovl pull
+ovl status
+ovl comments
+ovl compile main.tex
+ovl push
 ```
 
 project ID は Overleaf のプロジェクト URL の末尾です。
@@ -112,19 +156,19 @@ https://www.overleaf.com/project/<project-id>
 実際にファイルを書き換えず、何が起きるか確認するには:
 
 ```sh
-./ovl pull --preview
+ovl pull --preview
 ```
 
 remote 側で削除されたファイルは、デフォルトではローカルから削除しません。削除も反映するには:
 
 ```sh
-./ovl pull --delete-local
+ovl pull --delete-local
 ```
 
 local の変更を破棄して remote の snapshot に合わせるには:
 
 ```sh
-./ovl pull --force
+ovl pull --force
 ```
 
 `--force` は、remote に存在するファイルで local を上書きし、remote に存在しない scan 対象の local ファイルを削除します。実行前に local backup を作成します。
@@ -134,13 +178,13 @@ local の変更を破棄して remote の snapshot に合わせるには:
 ローカルファイル、最後に同期した base 状態、現在の Overleaf 状態を比較します。
 
 ```sh
-./ovl status
+ovl status
 ```
 
 Overleaf にアクセスせず local と base だけを比較するには:
 
 ```sh
-./ovl status --local-only
+ovl status --local-only
 ```
 
 ### `ovl diff`
@@ -148,27 +192,80 @@ Overleaf にアクセスせず local と base だけを比較するには:
 最後に同期した base 状態との差分を表示します。
 
 ```sh
-./ovl diff
-./ovl diff --remote
-./ovl diff --all
+ovl diff
+ovl diff --remote
+ovl diff --all
 ```
 
 テキストファイルは行単位の unified diff として表示します。変更のない行は前後の context だけを表示します。バイナリファイルは hash と size の要約を表示します。
+
+### `ovl comments [--include-resolved] [--include-unanchored] [--color=<when>] [--json]`
+
+Overleaf 上でプロジェクトに付けられたコメントを取得して表示します。デフォルトでは、未解決かつ現在のファイル内に対象箇所が残っているコメントだけを表示します。
+
+```sh
+ovl comments
+```
+
+解決済みのコメントも含めるには `--include-resolved` を指定します。
+
+```sh
+ovl comments --include-resolved
+```
+
+削除済みファイルなどに付いていて、現在の Overleaf 画面から対象箇所を確認できないコメントも表示するには `--include-unanchored` を指定します。解決済みかどうかと、対象箇所が現在も存在するかは独立して判定されるため、両方を含める場合は2つのオプションを組み合わせます。
+
+```sh
+ovl comments --include-unanchored
+ovl comments --include-resolved --include-unanchored
+```
+
+スクリプトなどから扱いやすい JSON 形式で出力するには `--json` を指定します。オプションは組み合わせて使用できます。
+
+```sh
+ovl comments --json
+ovl comments --include-resolved --include-unanchored --json
+```
+
+対象箇所を現在の文書内容と照合できた場合は、場所、状態、前後の行、投稿者、コメント本文をひとまとまりで表示します。`⟦` と `⟧` で囲まれた部分がコメントの対象です。
+
+```text
+main.tex:12:8  [open]
+  thread: ...
+
+    11 | Previous line
+  > 12 | Text with ⟦the reviewed phrase⟧ here.
+    13 | Next line
+
+  Reviewer <reviewer@example.com> — 2026-10-15 08:27 UTC
+    │ Please clarify this sentence.
+```
+
+対応する端末へ直接出力する場合は、場所、状態、対象範囲などを控えめに色分けします。パイプやファイルへのリダイレクト、`TERM=dumb`、`NO_COLOR` が設定された環境では自動的に無効になります。Windows では安全のため自動色付けを無効にしているため、色を使う場合は `--color=always` を指定してください。Gitと同様に、`--color=always` または `--color=never` で明示的に切り替えられます。JSON出力には色制御コードを含めません。
+
+```sh
+ovl comments --color=always
+ovl comments --color=never
+```
+
+JSON の `offset_utf16` は Overleaf から取得した0始まりの UTF-16 オフセットです。`line`、`column`、`end_line`、`end_column` は現在の文書との完全一致を確認できた場合だけ出力され、行・列は1始まり、列はUnicode文字単位です。
+
+コメント本文を取得できても、Overleaf 側のプロジェクト履歴方式や非公開 endpoint の変更によって文書内の位置を取得できない場合があります。そのようなコメントはデフォルトでは表示せず、`--include-unanchored` を指定した場合に `Location unavailable` として表示します。
 
 ### `ovl compile`
 
 Overleaf 側でコンパイルを実行し、生成された PDF をローカルへ保存します。
 
 ```sh
-./ovl compile
-./ovl compile main.tex
-./ovl compile --push main.tex
-./ovl compile --output build/main.pdf main.tex
+ovl compile
+ovl compile main.tex
+ovl compile --push main.tex
+ovl compile --output build/main.pdf main.tex
 ```
 
 `root.tex` を指定した場合、そのファイルを root document として compile request に渡します。指定しない場合は Overleaf プロジェクトの現在の root document を使います。
 
-出力先を指定しない場合、`root.tex` 指定時は `<rootのbasename>.pdf`、未指定時は `output.pdf` に保存します。例えば `./ovl compile chapters/main.tex` は `main.pdf` を作成します。
+出力先を指定しない場合、`root.tex` 指定時は `<rootのbasename>.pdf`、未指定時は `output.pdf` に保存します。例えば `ovl compile chapters/main.tex` は `main.pdf` を作成します。
 
 `--push` を付けると、コンパイル前に通常の `ovl push` を実行します。remote 変更や conflict がある場合は push と同じく停止し、compile は実行しません。生成される PDF は push 後に保存されるため、その実行で作られた PDF 自体は push 対象になりません。
 
@@ -185,7 +282,7 @@ local だけで変更されたファイルを Overleaf へアップロードし�
 remote 変更を無視して強制的に上書きするには:
 
 ```sh
-./ovl push --force
+ovl push --force
 ```
 
 `--force` は実行前に remote backup を作成します。`--force` では local を正として扱うため、remote にだけ存在するファイルや local で削除済みのファイルも remote から削除します。
@@ -193,7 +290,7 @@ remote 変更を無視して強制的に上書きするには:
 ローカルで削除されたファイルは、デフォルトでは remote から削除しません。remote 削除も反映するには:
 
 ```sh
-./ovl push --delete
+ovl push --delete
 ```
 
 `--delete` も実行前に remote backup を作成します。
