@@ -70,7 +70,7 @@ jobs:
                 [
                   .[] |
                   select(
-                    .path == $path and
+                    (.path == $path or (.path | startswith($path + "@"))) and
                     .head_sha == $sha and
                     .event == "pull_request"
                   )
