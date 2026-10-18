@@ -36,19 +36,28 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Check formatting
-        run: make format-check
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' 'Go files need formatting:' "$unformatted"
+            exit 1
+          fi
 
       - name: Check module files
-        run: make mod-check
+        run: go mod tidy -diff
 
       - name: Lint
-        run: make lint
+        run: |
+          go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
       - name: Build
-        run: make build
+        run: go build -trimpath ./...
 
       - name: Run all tests
-        run: make test
+        run: go test -shuffle=on -count=1 ./...
 
       - name: Run all tests with the race detector
-        run: make test-race
+        run: go test -race -count=1 ./...

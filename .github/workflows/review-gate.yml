@@ -1,0 +1,82 @@
+name: LLM review gate
+
+"on":
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: llm-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: LLM review required
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for a review of the current commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          for attempt in $(seq 1 40); do
+            if ! codex_comments="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq 'add')"; then
+              echo "GitHub API request failed; retrying ($attempt/40)."
+              sleep 15
+              continue
+            fi
+            if jq -e --arg sha "$HEAD_SHA" '
+              def codex_review:
+                try (
+                  (.body // "")
+                  | capture("<!-- codex-review-state:v1 (?<json>\\{[^\\n]*\\}) -->").json
+                  | fromjson
+                  | .code_review
+                ) catch null;
+              any(.[];
+                (. | codex_review) as $review |
+                .user.login == "chatgpt-codex-connector[bot]" and
+                $review != null and
+                $review.commit_sha == $sha and
+                $review.status == "completed"
+              )
+            ' <<<"$codex_comments" >/dev/null; then
+              echo "OpenAI Codex completed a review of $HEAD_SHA."
+              exit 0
+            fi
+
+            if ! copilot_reviews="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" | jq 'add')"; then
+              echo "GitHub API request failed; retrying ($attempt/40)."
+              sleep 15
+              continue
+            fi
+            if jq -e --arg sha "$HEAD_SHA" '
+              any(.[];
+                .user.login == "copilot-pull-request-reviewer[bot]" and
+                .commit_id == $sha and
+                (((.body // "") | test("unable to review|quota limit"; "i")) | not)
+              )
+            ' <<<"$copilot_reviews" >/dev/null; then
+              echo "GitHub Copilot completed a review of $HEAD_SHA."
+              exit 0
+            fi
+
+            echo "Waiting for an LLM review of $HEAD_SHA ($attempt/40)."
+            sleep 15
+          done
+
+          echo "::error::No completed Codex or Copilot review was found for the current commit. Request a review, then re-run this job."
+          exit 1

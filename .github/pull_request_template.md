@@ -5,5 +5,5 @@
 ## 確認
 
 - [ ] `CI required` が成功した
-- [ ] CopilotまたはCodexのLLMレビューが返った
+- [ ] `LLM review required` が成功した
 - [ ] レビュー指摘を反映し、会話を解決した
