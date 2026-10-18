@@ -7,6 +7,7 @@ name: Merge policy
       - synchronize
       - reopened
       - ready_for_review
+      - edited
 
 # pull_request_target deliberately runs this file from the base branch. Never
 # check out or execute pull request code in this workflow.
@@ -65,14 +66,15 @@ jobs:
               continue
             fi
 
-            if jq -e --arg sha "$HEAD_SHA" '
+            if jq -e --arg sha "$HEAD_SHA" --argjson pr "$PR_NUMBER" '
               def latest($path):
                 [
                   .[] |
                   select(
                     (.path == $path or (.path | startswith($path + "@"))) and
                     .head_sha == $sha and
-                    .event == "pull_request"
+                    .event == "pull_request" and
+                    any(.pull_requests[]?; .number == $pr)
                   )
                 ] | sort_by(.id) | last;
               (latest(".github/workflows/ci.yml") |
