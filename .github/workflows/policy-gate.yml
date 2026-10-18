@@ -36,6 +36,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
+          pr_context_is_current() {
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" |
+              jq -e --arg base "$BASE_SHA" --arg head "$HEAD_SHA" '
+                .base.sha == $base and .head.sha == $head
+              ' >/dev/null
+          }
+
+          if ! pr_context_is_current; then
+            echo "::error::This workflow event no longer matches the pull request head and base."
+            exit 1
+          fi
+
           if ! pull_request="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"; then
             echo "::error::Could not inspect the pull request."
             exit 1
@@ -88,6 +100,10 @@ jobs:
               (latest(".github/workflows/review-gate.yml"; $review_title) |
                 .status == "completed" and .conclusion == "success")
             ' <<<"$runs" >/dev/null; then
+              if ! pr_context_is_current; then
+                echo "::error::The pull request head or base changed while this policy gate was running."
+                exit 1
+              fi
               echo "Trusted CI and Codex review gates passed for $HEAD_SHA."
               exit 0
             fi

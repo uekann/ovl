@@ -39,6 +39,8 @@ Staticcheckは、最低対応バージョンであるGo 1.25で動作する `v0.
 
 `.github/workflows/policy-gate.yml` は `pull_request_target` でmain側のworkflow定義を使い、PRのコードをcheckoutも実行もせず、現在のHEADに対する正規のCIとCodex review workflowが成功したことを確認します。検査の自己無効化や同名checkの追加を防ぐため、通常のPRから `.github/workflows/` 以下を変更することも拒否します。repositoryのActions policy `Allow trusted merge policy` は、この読み取り専用workflowに限って `pull_request_target` eventを明示的に許可します。workflowを保守するときは、repository管理者がrulesetの `Policy required` を一時的に外し、変更をレビュー・検証した後、再び必須にしてください。
 
+Pull requestのbase branchを変更した場合、古い差分へのレビューを再利用しないよう、そのbase変更より後に新しいcommitをpushしてからCodex reviewを依頼してください。空commitでも構いません。headまたはbaseがworkflow実行中に変わった場合も、古いeventの再実行は成功扱いになりません。
+
 ## LLMによるレビュー
 
 `main`のrulesetは、pull request作成時とpush後にGitHub Copilotのレビューを自動依頼します。Pull request作成者にCopilot利用権とAI creditsがある場合に実行されます。Copilotには `.github/copilot-instructions.md` とrootの`AGENTS.md`を通じて、ovl固有のレビュー観点を渡します。
