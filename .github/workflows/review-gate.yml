@@ -52,7 +52,8 @@ jobs:
                 .user.login == "chatgpt-codex-connector[bot]" and
                 $review != null and
                 $review.commit_sha == $sha and
-                $review.status == "completed"
+                $review.status == "completed" and
+                $review.has_unresolved_findings == false
               )
             ' <<<"$codex_comments" >/dev/null; then
               echo "OpenAI Codex completed a review of $HEAD_SHA."
@@ -63,5 +64,5 @@ jobs:
             sleep 15
           done
 
-          echo "::error::No completed OpenAI Codex review was found for the current commit. Request a review with '@codex review', then re-run this job."
+          echo "::error::No completed OpenAI Codex review without unresolved findings was found for the current commit. Request or complete a review, then re-run this job."
           exit 1

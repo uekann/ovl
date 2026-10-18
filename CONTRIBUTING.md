@@ -53,6 +53,6 @@ ChatGPT Proの利用枠でOpenAI Codexのレビューも利用できます。初
 
 Codexはrootの`AGENTS.md`にある `## Code Review Rules` を読み、ovl固有の重大リスクを重点的に確認します。機械的に判定できる事項はCIへ置き、LLMにはOverleaf上のentity identity、同期時のデータ保護、コメント位置、credentialやprivate APIの扱いをレビューさせています。
 
-`.github/workflows/review-gate.yml` は、現在のpull request HEADに対するCodexの機械可読な完了状態が返るまで待機します。Copilot reviewは追加の助言として利用しますが、quota超過や応答形式の変化をレビュー完了と誤認しないよう、必須ゲートの判定には使いません。10分以内にCodex reviewが完了しなかった場合は失敗するため、レビューを依頼してからjobを再実行してください。rulesetで `LLM review required` も必須にするため、古いcommitへのレビューだけではマージできません。
+`.github/workflows/review-gate.yml` は、現在のpull request HEADに対するCodexの機械可読な完了状態が返り、未解決の指摘がなくなるまで待機します。Copilot reviewは追加の助言として利用しますが、quota超過や応答形式の変化をレビュー完了と誤認しないよう、必須ゲートの判定には使いません。10分以内にCodex reviewが完了しなかった場合は失敗するため、レビューを依頼してからjobを再実行してください。rulesetで `LLM review required` も必須にするため、古いcommitへのレビューだけではマージできません。
 
 `openai/codex-action` をworkflow内で直接実行する方法もありますが、GitHub secretに `OPENAI_API_KEY` が必要で、ChatGPT Proとは別のAPI課金になります。このリポジトリでは、API keyを公開repositoryのpull request workflowへ持ち込まずに済むGitHub連携を標準とします。
