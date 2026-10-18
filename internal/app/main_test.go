@@ -37,6 +37,13 @@ func TestHelpFlags(t *testing.T) {
 	must(t, Run(context.Background(), []string{"comments", "--help"}))
 }
 
+func TestCommentsRejectsInvalidColorMode(t *testing.T) {
+	err := Run(context.Background(), []string{"comments", "--color=sometimes"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --color value") {
+		t.Fatalf("expected invalid color mode error, got %v", err)
+	}
+}
+
 func TestPushUploadsLocalOnlyChange(t *testing.T) {
 	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "base\n"})
 	must(t, os.WriteFile(filepath.Join(project, "main.tex"), []byte("local\n"), 0o644))

@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/term"
 )
 
 type commentSnippet struct {
@@ -24,6 +28,70 @@ type commentSnippetLine struct {
 	OpensSelection  bool
 	ClosesSelection bool
 }
+
+type commentOutputOptions struct {
+	JSON  bool
+	Color bool
+}
+
+type commentColorMode string
+
+const (
+	commentColorAuto   commentColorMode = "auto"
+	commentColorAlways commentColorMode = "always"
+	commentColorNever  commentColorMode = "never"
+)
+
+type commentStyle struct {
+	color bool
+}
+
+func parseCommentColorMode(value string) (commentColorMode, error) {
+	mode := commentColorMode(value)
+	switch mode {
+	case commentColorAuto, commentColorAlways, commentColorNever:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid --color value %q: want auto, always, or never", value)
+	}
+}
+
+func commentColorEnabled(mode commentColorMode, w io.Writer) bool {
+	isTTY := false
+	if file, ok := w.(*os.File); ok {
+		isTTY = term.IsTerminal(int(file.Fd()))
+	}
+	return resolveCommentColor(mode, isTTY, os.Getenv("TERM"), os.Getenv("NO_COLOR"), runtime.GOOS)
+}
+
+func resolveCommentColor(mode commentColorMode, isTTY bool, termEnv, noColor, goos string) bool {
+	switch mode {
+	case commentColorAlways:
+		return true
+	case commentColorNever:
+		return false
+	case commentColorAuto:
+		// Older Windows consoles may report a terminal without supporting ANSI
+		// escape sequences. Users can still opt in with --color=always.
+		return isTTY && termEnv != "dumb" && noColor == "" && goos != "windows"
+	default:
+		return false
+	}
+}
+
+func (s commentStyle) apply(code, value string) string {
+	if !s.color || value == "" {
+		return value
+	}
+	return "\x1b[" + code + "m" + value + "\x1b[0m"
+}
+
+func (s commentStyle) location(value string) string { return s.apply("1;36", value) }
+func (s commentStyle) open(value string) string     { return s.apply("33", value) }
+func (s commentStyle) resolved(value string) string { return s.apply("2;32", value) }
+func (s commentStyle) metadata(value string) string { return s.apply("2", value) }
+func (s commentStyle) author(value string) string   { return s.apply("1", value) }
+func (s commentStyle) selected(value string) string { return s.apply("1;36", value) }
 
 func filterComments(comments []CommentThread, includeResolved, includeUnanchored bool) []CommentThread {
 	filtered := make([]CommentThread, 0, len(comments))
@@ -174,14 +242,15 @@ func makeCommentSnippet(source string, anchor CommentAnchor) commentSnippet {
 	return snippet
 }
 
-func writeComments(w io.Writer, comments []CommentThread, snippets map[string]commentSnippet, asJSON bool) error {
+func writeComments(w io.Writer, comments []CommentThread, snippets map[string]commentSnippet, options commentOutputOptions) error {
 	comments = sortedComments(comments)
-	if asJSON {
+	if options.JSON {
 		encoder := json.NewEncoder(w)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(comments)
 	}
 
+	style := commentStyle{color: options.Color}
 	var out strings.Builder
 	if len(comments) == 0 {
 		out.WriteString("No comments.\n")
@@ -192,42 +261,50 @@ func writeComments(w io.Writer, comments []CommentThread, snippets map[string]co
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-		status := "open"
-		if comment.Resolved {
-			status = "resolved"
+		location := "Location unavailable"
+		if comment.Anchor != nil && comment.Anchor.Path != "" {
+			location = terminalSafe(comment.Anchor.Path)
+			if comment.Anchor.Line > 0 {
+				location += fmt.Sprintf(":%d:%d", comment.Anchor.Line, comment.Anchor.Column)
+			}
 		}
-		if !commentIsAnchored(comment) {
-			fmt.Fprintf(&out, "[%s] anchor unavailable (thread %s)\n", status, terminalSafe(comment.ID))
-			if comment.Anchor != nil && comment.Anchor.Text != "" {
-				writeIndentedLines(&out, "  selected: ", "            ", comment.Anchor.Text)
-			}
-		} else if comment.Anchor.Line > 0 {
-			fmt.Fprintf(&out, "[%s] %s:%d:%d (thread %s)\n", status, terminalSafe(comment.Anchor.Path), comment.Anchor.Line, comment.Anchor.Column, terminalSafe(comment.ID))
-			if snippet, ok := snippets[comment.ID]; ok {
-				writeCommentSnippet(&out, snippet)
-			} else {
-				writeIndentedLines(&out, "  selected: ", "            ", comment.Anchor.Text)
-			}
-		} else {
-			fmt.Fprintf(&out, "[%s] %s (UTF-16 offset %d, thread %s)\n", status, terminalSafe(comment.Anchor.Path), comment.Anchor.OffsetUTF16, terminalSafe(comment.ID))
-			writeIndentedLines(&out, "  selected: ", "            ", comment.Anchor.Text)
+		fmt.Fprintf(&out, "%s  %s\n", style.location(location), styledCommentStatus(style, comment.Resolved))
+		if comment.Anchor != nil && comment.Anchor.Path != "" && comment.Anchor.Line == 0 {
+			metadata := fmt.Sprintf("location unavailable (UTF-16 offset %d)", comment.Anchor.OffsetUTF16)
+			fmt.Fprintf(&out, "  %s\n", style.metadata(metadata))
 		}
-		for _, message := range comment.Messages {
-			author := message.Author.Name
-			if author == "" {
-				author = message.Author.Email
+		fmt.Fprintf(&out, "  %s\n", style.metadata("thread: "+terminalSafe(comment.ID)))
+
+		if comment.Anchor != nil && comment.Anchor.Line > 0 {
+			if snippet, ok := snippets[comment.ID]; ok && len(snippet.Lines) > 0 {
+				out.WriteByte('\n')
+				writeCommentSnippetStyled(&out, snippet, style)
+			} else if comment.Anchor.Text != "" {
+				out.WriteByte('\n')
+				writeCommentTextBlock(&out, "selected:", comment.Anchor.Text, style, true)
 			}
-			if author == "" {
-				author = "Unknown author"
-			} else if message.Author.Email != "" && message.Author.Email != author {
-				author += " <" + message.Author.Email + ">"
+		} else if comment.Anchor != nil && comment.Anchor.Text != "" {
+			out.WriteByte('\n')
+			writeCommentTextBlock(&out, "selected:", comment.Anchor.Text, style, true)
+		}
+
+		if len(comment.Messages) > 0 {
+			out.WriteByte('\n')
+		}
+		for messageIndex, message := range comment.Messages {
+			if messageIndex > 0 {
+				out.WriteByte('\n')
 			}
 			timestamp := "unknown time"
 			if message.Timestamp != nil {
-				timestamp = message.Timestamp.UTC().Format("2006-01-02T15:04:05Z07:00")
+				timestamp = message.Timestamp.UTC().Format("2006-01-02 15:04 UTC")
 			}
-			fmt.Fprintf(&out, "  %s — %s\n", terminalSafe(author), timestamp)
-			writeIndentedLines(&out, "    ", "    ", message.Content)
+			fmt.Fprintf(&out, "  %s %s %s\n",
+				styledCommentAuthor(style, message.Author),
+				style.metadata("—"),
+				style.metadata(timestamp),
+			)
+			writeCommentTextBlock(&out, "", message.Content, style, false)
 		}
 	}
 	_, err := io.WriteString(w, out.String())
@@ -235,6 +312,10 @@ func writeComments(w io.Writer, comments []CommentThread, snippets map[string]co
 }
 
 func writeCommentSnippet(out io.Writer, snippet commentSnippet) {
+	writeCommentSnippetStyled(out, snippet, commentStyle{})
+}
+
+func writeCommentSnippetStyled(out io.Writer, snippet commentSnippet, style commentStyle) {
 	if len(snippet.Lines) == 0 {
 		return
 	}
@@ -242,29 +323,68 @@ func writeCommentSnippet(out io.Writer, snippet commentSnippet) {
 	for _, line := range snippet.Lines {
 		marker := " "
 		if line.Selected {
-			marker = ">"
+			marker = style.selected(">")
 		}
-		fmt.Fprintf(out, "  %s %*d | %s\n", marker, width, line.Number, markedSnippetText(line))
+		lineNumber := style.metadata(fmt.Sprintf("%*d", width, line.Number))
+		fmt.Fprintf(out, "  %s %s %s %s\n", marker, lineNumber, style.metadata("|"), markedSnippetTextStyled(line, style))
 	}
 }
 
 func markedSnippetText(line commentSnippetLine) string {
+	return markedSnippetTextStyled(line, commentStyle{})
+}
+
+func markedSnippetTextStyled(line commentSnippetLine, style commentStyle) string {
 	runes := []rune(line.Text)
+	if !line.Selected {
+		return terminalSafe(line.Text)
+	}
 	start := min(max(0, line.SelectionStart), len(runes))
 	end := min(max(start, line.SelectionEnd), len(runes))
-	var out strings.Builder
-	for i := 0; i <= len(runes); i++ {
-		if line.OpensSelection && i == start {
-			out.WriteString("⟦")
-		}
-		if line.ClosesSelection && i == end {
-			out.WriteString("⟧")
-		}
-		if i < len(runes) {
-			out.WriteRune(runes[i])
-		}
+	selected := terminalSafe(string(runes[start:end]))
+	if line.OpensSelection {
+		selected = "⟦" + selected
 	}
-	return terminalSafe(out.String())
+	if line.ClosesSelection {
+		selected += "⟧"
+	}
+	return terminalSafe(string(runes[:start])) + style.selected(selected) + terminalSafe(string(runes[end:]))
+}
+
+func styledCommentStatus(style commentStyle, resolved bool) string {
+	if resolved {
+		return style.resolved("[resolved]")
+	}
+	return style.open("[open]")
+}
+
+func styledCommentAuthor(style commentStyle, author CommentAuthor) string {
+	name := terminalSafe(author.Name)
+	email := terminalSafe(author.Email)
+	if name == "" && email == "" {
+		return style.author("Unknown author")
+	}
+	if name == "" {
+		return style.author(email)
+	}
+	formatted := style.author(name)
+	if email != "" && email != name {
+		formatted += " " + style.metadata("<"+email+">")
+	}
+	return formatted
+}
+
+func writeCommentTextBlock(out *strings.Builder, label, value string, style commentStyle, selected bool) {
+	if label != "" {
+		fmt.Fprintf(out, "  %s\n", style.metadata(label))
+	}
+	for _, line := range strings.Split(value, "\n") {
+		text := terminalSafe(line)
+		if selected {
+			text = style.selected(text)
+		}
+		fmt.Fprintf(out, "    %s %s\n", style.metadata("│"), text)
+	}
 }
 
 func sortedComments(comments []CommentThread) []CommentThread {
@@ -296,19 +416,6 @@ func sortedComments(comments []CommentThread) []CommentThread {
 		return left.ID < right.ID
 	})
 	return sorted
-}
-
-func writeIndentedLines(out *strings.Builder, firstPrefix, restPrefix, value string) {
-	lines := strings.Split(value, "\n")
-	for i, line := range lines {
-		if i == 0 {
-			out.WriteString(firstPrefix)
-		} else {
-			out.WriteString(restPrefix)
-		}
-		out.WriteString(terminalSafe(line))
-		out.WriteByte('\n')
-	}
 }
 
 func terminalSafe(value string) string {

@@ -199,7 +199,7 @@ ovl diff --all
 
 テキストファイルは行単位の unified diff として表示します。変更のない行は前後の context だけを表示します。バイナリファイルは hash と size の要約を表示します。
 
-### `ovl comments [--include-resolved] [--include-unanchored] [--json]`
+### `ovl comments [--include-resolved] [--include-unanchored] [--color=<when>] [--json]`
 
 Overleaf 上でプロジェクトに付けられたコメントを取得して表示します。デフォルトでは、未解決かつ現在のファイル内に対象箇所が残っているコメントだけを表示します。
 
@@ -227,18 +227,30 @@ ovl comments --json
 ovl comments --include-resolved --include-unanchored --json
 ```
 
-対象箇所を現在の文書内容と照合できた場合は、1始まりの行・列と前後の行を表示します。`⟦` と `⟧` で囲まれた部分がコメントの対象です。
+対象箇所を現在の文書内容と照合できた場合は、場所、状態、前後の行、投稿者、コメント本文をひとまとまりで表示します。`⟦` と `⟧` で囲まれた部分がコメントの対象です。
 
 ```text
-[open] main.tex:12:8 (thread ...)
+main.tex:12:8  [open]
+  thread: ...
+
     11 | Previous line
   > 12 | Text with ⟦the reviewed phrase⟧ here.
     13 | Next line
+
+  Reviewer <reviewer@example.com> — 2026-10-15 08:27 UTC
+    │ Please clarify this sentence.
+```
+
+対応する端末へ直接出力する場合は、場所、状態、対象範囲などを控えめに色分けします。パイプやファイルへのリダイレクト、`TERM=dumb`、`NO_COLOR` が設定された環境では自動的に無効になります。Windows では安全のため自動色付けを無効にしているため、色を使う場合は `--color=always` を指定してください。Gitと同様に、`--color=always` または `--color=never` で明示的に切り替えられます。JSON出力には色制御コードを含めません。
+
+```sh
+ovl comments --color=always
+ovl comments --color=never
 ```
 
 JSON の `offset_utf16` は Overleaf から取得した0始まりの UTF-16 オフセットです。`line`、`column`、`end_line`、`end_column` は現在の文書との完全一致を確認できた場合だけ出力され、行・列は1始まり、列はUnicode文字単位です。
 
-コメント本文を取得できても、Overleaf 側のプロジェクト履歴方式や非公開 endpoint の変更によって文書内の位置を取得できない場合があります。そのようなコメントはデフォルトでは表示せず、`--include-unanchored` を指定した場合に `anchor unavailable` として表示します。
+コメント本文を取得できても、Overleaf 側のプロジェクト履歴方式や非公開 endpoint の変更によって文書内の位置を取得できない場合があります。そのようなコメントはデフォルトでは表示せず、`--include-unanchored` を指定した場合に `Location unavailable` として表示します。
 
 ### `ovl compile`
 

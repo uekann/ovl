@@ -54,7 +54,7 @@ Commands:
   ovl status [--local-only]
   ovl diff [--remote] [--all]
   ovl compile [--push] [--output <path>] [root.tex]
-  ovl comments [--include-resolved] [--include-unanchored] [--json]
+  ovl comments [--include-resolved] [--include-unanchored] [--color=<when>] [--json]
   ovl push [--force] [--delete]
   ovl backup-remote
 
@@ -381,18 +381,23 @@ func defaultPDFOutputPath(rootDoc string) string {
 
 func cmdComments(ctx context.Context, args []string) error {
 	if hasHelp(args) {
-		fmt.Println("usage: ovl comments [--include-resolved] [--include-unanchored] [--json]")
+		fmt.Println("usage: ovl comments [--include-resolved] [--include-unanchored] [--color=<auto|always|never>] [--json]")
 		return nil
 	}
 	fs := flag.NewFlagSet("comments", flag.ContinueOnError)
 	includeResolved := fs.Bool("include-resolved", false, "include resolved comment threads")
 	includeUnanchored := fs.Bool("include-unanchored", false, "include threads that cannot be located in the current project")
+	color := fs.String("color", "auto", "colorize output: auto, always, or never")
 	asJSON := fs.Bool("json", false, "print comments as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: ovl comments [--include-resolved] [--include-unanchored] [--json]")
+		return errors.New("usage: ovl comments [--include-resolved] [--include-unanchored] [--color=<auto|always|never>] [--json]")
+	}
+	colorMode, err := parseCommentColorMode(*color)
+	if err != nil {
+		return err
 	}
 	root, cfg, _, err := loadProject()
 	if err != nil {
@@ -414,7 +419,10 @@ func cmdComments(ctx context.Context, args []string) error {
 			return ctxErr
 		}
 	}
-	return writeComments(os.Stdout, comments, snippets, *asJSON)
+	return writeComments(os.Stdout, comments, snippets, commentOutputOptions{
+		JSON:  *asJSON,
+		Color: commentColorEnabled(colorMode, os.Stdout),
+	})
 }
 
 func cmdPush(ctx context.Context, args []string) error {

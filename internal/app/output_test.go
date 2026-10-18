@@ -74,11 +74,18 @@ func TestWriteCommentsHumanReadable(t *testing.T) {
 		{
 			ID:     "thread-with-anchor",
 			Anchor: &CommentAnchor{Path: "main.tex", OffsetUTF16: 104, Text: "selected", Line: 2, Column: 6, EndLine: 2, EndColumn: 14},
-			Messages: []CommentMessage{{
-				Content:   "Please use your\nfull name.",
-				Timestamp: &timestamp,
-				Author:    CommentAuthor{Name: "Reviewer", Email: "reviewer@example.com"},
-			}},
+			Messages: []CommentMessage{
+				{
+					Content:   "Please use your\nfull name.",
+					Timestamp: &timestamp,
+					Author:    CommentAuthor{Name: "Reviewer", Email: "reviewer@example.com"},
+				},
+				{
+					Content:   "Updated.",
+					Timestamp: &timestamp,
+					Author:    CommentAuthor{Name: "Author Two"},
+				},
+			},
 		},
 	}
 	snippets := map[string]commentSnippet{
@@ -90,21 +97,29 @@ func TestWriteCommentsHumanReadable(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, snippets, false); err != nil {
+	if err := writeComments(&out, comments, snippets, commentOutputOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"[open] main.tex:2:6 (thread thread-with-anchor)",
+		"main.tex:2:6  [open]",
+		"  thread: thread-with-anchor",
+		"",
 		"    1 | before",
 		"  > 2 | text ⟦selected⟧ here",
 		"    3 | after",
-		"  Reviewer <reviewer@example.com> — 2026-10-15T08:27:38Z",
-		"    Please use your",
-		"    full name.",
 		"",
-		"[resolved] anchor unavailable (thread thread-without-anchor)",
-		"  reviewer@example.com — 2026-10-15T08:27:38Z",
-		"    done",
+		"  Reviewer <reviewer@example.com> — 2026-10-15 08:27 UTC",
+		"    │ Please use your",
+		"    │ full name.",
+		"",
+		"  Author Two — 2026-10-15 08:27 UTC",
+		"    │ Updated.",
+		"",
+		"Location unavailable  [resolved]",
+		"  thread: thread-without-anchor",
+		"",
+		"  reviewer@example.com — 2026-10-15 08:27 UTC",
+		"    │ done",
 		"",
 	}, "\n")
 	if got := out.String(); got != want {
@@ -119,7 +134,7 @@ func TestWriteCommentsJSONIsIndentedAndSorted(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, nil, true); err != nil {
+	if err := writeComments(&out, comments, nil, commentOutputOptions{JSON: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(out.String(), "[\n  {") {
@@ -157,8 +172,11 @@ func TestWriteCommentsJSONContract(t *testing.T) {
 	}}
 
 	var out bytes.Buffer
-	if err := writeComments(&out, comments, nil, true); err != nil {
+	if err := writeComments(&out, comments, nil, commentOutputOptions{JSON: true, Color: true}); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("JSON output contains ANSI escapes: %q", out.String())
 	}
 	want := `[
   {
@@ -195,7 +213,7 @@ func TestWriteCommentsJSONContract(t *testing.T) {
 
 func TestWriteCommentsJSONEmptyIsArray(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeComments(&out, []CommentThread{}, nil, true); err != nil {
+	if err := writeComments(&out, []CommentThread{}, nil, commentOutputOptions{JSON: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != "[]\n" {
@@ -205,10 +223,124 @@ func TestWriteCommentsJSONEmptyIsArray(t *testing.T) {
 
 func TestWriteCommentsEmpty(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeComments(&out, nil, nil, false); err != nil {
+	if err := writeComments(&out, nil, nil, commentOutputOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != "No comments.\n" {
 		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestWriteCommentsUnanchoredSeparatesMetadataFromSelectedText(t *testing.T) {
+	comments := []CommentThread{{
+		ID: "stale-thread",
+		Anchor: &CommentAnchor{
+			Path:        "main.tex",
+			OffsetUTF16: 42,
+			Text:        "old selection",
+		},
+	}}
+
+	var out bytes.Buffer
+	if err := writeComments(&out, comments, nil, commentOutputOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"main.tex  [open]",
+		"  location unavailable (UTF-16 offset 42)",
+		"  thread: stale-thread",
+		"",
+		"  selected:",
+		"    │ old selection",
+		"",
+	}, "\n")
+	if got := out.String(); got != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestParseCommentColorMode(t *testing.T) {
+	for _, value := range []string{"auto", "always", "never"} {
+		mode, err := parseCommentColorMode(value)
+		if err != nil || string(mode) != value {
+			t.Fatalf("parseCommentColorMode(%q) = %q, %v", value, mode, err)
+		}
+	}
+	if _, err := parseCommentColorMode("sometimes"); err == nil {
+		t.Fatal("invalid color mode was accepted")
+	}
+}
+
+func TestResolveCommentColor(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    commentColorMode
+		isTTY   bool
+		term    string
+		noColor string
+		goos    string
+		want    bool
+	}{
+		{name: "auto terminal", mode: commentColorAuto, isTTY: true, term: "xterm-256color", goos: "linux", want: true},
+		{name: "auto empty no color value", mode: commentColorAuto, isTTY: true, term: "xterm-256color", noColor: "", goos: "linux", want: true},
+		{name: "auto pipe", mode: commentColorAuto, term: "xterm-256color", goos: "linux"},
+		{name: "auto no color", mode: commentColorAuto, isTTY: true, term: "xterm-256color", noColor: "1", goos: "linux"},
+		{name: "auto dumb terminal", mode: commentColorAuto, isTTY: true, term: "dumb", goos: "linux"},
+		{name: "auto windows fallback", mode: commentColorAuto, isTTY: true, term: "xterm-256color", goos: "windows"},
+		{name: "always overrides environment", mode: commentColorAlways, noColor: "1", goos: "windows", want: true},
+		{name: "never", mode: commentColorNever, isTTY: true, term: "xterm-256color", goos: "linux"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := resolveCommentColor(test.mode, test.isTTY, test.term, test.noColor, test.goos); got != test.want {
+				t.Fatalf("resolveCommentColor() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWriteCommentsColorAddsOnlyPresentationEscapes(t *testing.T) {
+	comments := []CommentThread{{
+		ID:     "thread-id",
+		Anchor: &CommentAnchor{Path: "main.tex", Line: 2, Column: 3},
+		Messages: []CommentMessage{{
+			Author:  CommentAuthor{Name: "Reviewer"},
+			Content: "Clarify this.",
+		}},
+	}}
+	snippets := map[string]commentSnippet{
+		"thread-id": {Lines: []commentSnippetLine{{
+			Number:          2,
+			Text:            "a selected phrase",
+			Selected:        true,
+			SelectionStart:  2,
+			SelectionEnd:    10,
+			OpensSelection:  true,
+			ClosesSelection: true,
+		}}},
+	}
+
+	var plain, colored bytes.Buffer
+	if err := writeComments(&plain, comments, snippets, commentOutputOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeComments(&colored, comments, snippets, commentOutputOptions{Color: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(colored.String(), "\x1b[1;36mmain.tex:2:3\x1b[0m") ||
+		!strings.Contains(colored.String(), "\x1b[33m[open]\x1b[0m") ||
+		!strings.Contains(colored.String(), "\x1b[1;36m⟦selected⟧\x1b[0m") {
+		t.Fatalf("expected restrained color styling, got %q", colored.String())
+	}
+	stripANSI := strings.NewReplacer(
+		"\x1b[1;36m", "",
+		"\x1b[2;32m", "",
+		"\x1b[33m", "",
+		"\x1b[2m", "",
+		"\x1b[1m", "",
+		"\x1b[0m", "",
+	)
+	if got := stripANSI.Replace(colored.String()); got != plain.String() {
+		t.Fatalf("colored output changes content:\n%s\nplain:\n%s", got, plain.String())
 	}
 }
