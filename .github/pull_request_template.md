@@ -5,5 +5,5 @@
 ## 確認
 
 - [ ] `CI required` が成功した
-- [ ] Codex のレビューが返った（自動実行されない場合は `@codex review`）
+- [ ] CopilotまたはCodexのLLMレビューが返った
 - [ ] レビュー指摘を反映し、会話を解決した

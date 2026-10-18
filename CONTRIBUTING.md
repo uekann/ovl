@@ -35,9 +35,11 @@ Staticcheckは、最低対応バージョンであるGo 1.25で動作する `v0.
 
 単独開発でも自分のpull requestを進められるよう、人間による承認数は0とします。フォーマット、リント、ビルド、通常テスト、race detector付きテストのどれか1つでも失敗すれば、`CI required` は成功せずマージできません。
 
-## Codexによるレビュー
+## LLMによるレビュー
 
-CodexのGitHub連携を使うと、ChatGPTのCodex利用枠でpull requestをレビューできます。初回だけCodexでGitHub repositoryを接続し、Code review設定で `uekann/ovl` のAutomatic reviewを有効にしてください。pull request作成時とpush後にレビューする設定を推奨します。
+`main`のrulesetは、pull request作成時とpush後にGitHub Copilotのレビューを自動依頼します。Pull request作成者にCopilot利用権とAI creditsがある場合に実行されます。Copilotには `.github/copilot-instructions.md` とrootの`AGENTS.md`を通じて、ovl固有のレビュー観点を渡します。
+
+ChatGPT Proの利用枠でOpenAI Codexのレビューも利用できます。初回だけ[Codex cloud environments](https://chatgpt.com/codex/cloud/settings/environments)でこのrepositoryのenvironmentを作成し、Code review設定で `uekann/ovl` のAutomatic reviewを有効にしてください。pull request作成時とpush後にレビューする設定を推奨します。
 
 自動レビューが開始されない場合は、pull requestへ次のコメントを投稿して手動で依頼できます。
 
