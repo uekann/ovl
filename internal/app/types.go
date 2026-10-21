@@ -17,6 +17,7 @@ type State = domain.State
 type FileState = domain.FileState
 type FileSnapshot = domain.FileSnapshot
 type CompileResult = domain.CompileResult
+type CompileError = domain.CompileError
 type CommentThread = domain.CommentThread
 type CommentAnchor = domain.CommentAnchor
 type CommentMessage = domain.CommentMessage

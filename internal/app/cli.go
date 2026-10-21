@@ -346,9 +346,13 @@ func cmdCompile(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	result, err := backendFor(projectRoot, cfg).CompilePDF(ctx, rootDoc)
-	if err != nil {
-		return err
+	result, compileErr := backendFor(projectRoot, cfg).CompilePDF(ctx, rootDoc)
+	diagnosticErr := compileErr
+	if len(result.Errors) > 0 {
+		diagnosticErr = errors.Join(formatCompileErrors(result.Errors), diagnosticErr)
+	}
+	if diagnosticErr != nil && len(result.PDF) == 0 {
+		return diagnosticErr
 	}
 	outputPath := *output
 	if outputPath == "" {
@@ -358,13 +362,38 @@ func cmdCompile(ctx context.Context, args []string) error {
 		outputPath = filepath.Join(projectRoot, outputPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return err
+		return errors.Join(err, diagnosticErr)
 	}
 	if err := os.WriteFile(outputPath, result.PDF, 0o644); err != nil {
-		return err
+		return errors.Join(err, diagnosticErr)
 	}
 	fmt.Printf("Compiled PDF saved to %s\n", outputPath)
-	return nil
+	return diagnosticErr
+}
+
+func formatCompileErrors(diagnostics []CompileError) error {
+	var message strings.Builder
+	fmt.Fprintf(&message, "compile produced %d error(s)", len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		message.WriteByte('\n')
+		switch {
+		case diagnostic.File != "" && diagnostic.Line > 0:
+			fmt.Fprintf(&message, "%s:%d: %s", diagnostic.File, diagnostic.Line, diagnostic.Message)
+		case diagnostic.File != "":
+			fmt.Fprintf(&message, "%s: %s", diagnostic.File, diagnostic.Message)
+		case diagnostic.Line > 0:
+			fmt.Fprintf(&message, "line %d: %s", diagnostic.Line, diagnostic.Message)
+		default:
+			message.WriteString(diagnostic.Message)
+		}
+		if context := strings.TrimSpace(diagnostic.Context); context != "" {
+			for line := range strings.SplitSeq(context, "\n") {
+				message.WriteString("\n  ")
+				message.WriteString(line)
+			}
+		}
+	}
+	return errors.New(message.String())
 }
 
 func defaultPDFOutputPath(rootDoc string) string {

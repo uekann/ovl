@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -319,24 +320,62 @@ func (b *overleafBackend) CompilePDF(ctx context.Context, rootPath string) (doma
 	if err != nil {
 		return domain.CompileResult{}, err
 	}
+
+	compileResult := domain.CompileResult{Status: result.Status}
+	var resultErrors []error
+	if pdf, ok := result.outputPDF(); ok {
+		pdfBody, downloadErr := b.downloadCompileOutput(ctx, pdf.URL, result.CLSIServerID, editorID)
+		if downloadErr != nil {
+			resultErrors = append(resultErrors, downloadErr)
+		} else {
+			compileResult.PDF = pdfBody
+		}
+	} else if result.Status == "success" {
+		resultErrors = append(resultErrors, errors.New("compile succeeded but output.pdf was not returned"))
+	}
+
+	var outputLog []byte
+	logFile, ok := result.outputLog()
+	if !ok {
+		resultErrors = append(resultErrors, errors.New("output.log was not returned; compile errors may be incomplete"))
+	} else {
+		logBody, logErr := b.downloadCompileTextOutput(ctx, logFile, result.CLSIServerID, editorID)
+		outputLog = logBody
+		compileResult.Errors = appendUniqueCompileErrors(compileResult.Errors, parseCompileErrors(logBody))
+		if logErr != nil {
+			resultErrors = append(resultErrors, logErr)
+		}
+	}
+
+	bibliographyLogs := result.bibliographyLogs()
+	if len(bibliographyLogs) > maxCompileDiagnosticArtifacts {
+		resultErrors = append(resultErrors, fmt.Errorf(
+			"compile response included %d bibliography logs; only the first %d were inspected",
+			len(bibliographyLogs), maxCompileDiagnosticArtifacts,
+		))
+		bibliographyLogs = bibliographyLogs[:maxCompileDiagnosticArtifacts]
+	}
+	for _, bibliographyLog := range bibliographyLogs {
+		logBody, logErr := b.downloadCompileTextOutput(ctx, bibliographyLog, result.CLSIServerID, editorID)
+		compileResult.Errors = appendUniqueCompileErrors(compileResult.Errors, parseBibliographyErrors(logBody))
+		if logErr != nil {
+			resultErrors = append(resultErrors, logErr)
+		}
+	}
+
 	if result.Status != "success" {
-		return domain.CompileResult{}, fmt.Errorf("compile status is %s", result.Status)
+		resultErrors = append(resultErrors, compileStatusError(result, outputLog, len(compileResult.Errors) > 0))
 	}
-	pdf := result.outputPDF()
-	if pdf.Path == "" {
-		return domain.CompileResult{}, errors.New("compile succeeded but output.pdf was not returned")
-	}
-	pdfBody, err := b.downloadCompileOutput(ctx, pdf.URL, result.CLSIServerID, editorID)
-	if err != nil {
-		return domain.CompileResult{}, err
-	}
-	return domain.CompileResult{PDF: pdfBody, Status: result.Status}, nil
+	return compileResult, errors.Join(resultErrors...)
 }
 
+const maxCompileDiagnosticArtifacts = 32
+
 type compileResponse struct {
-	Status       string              `json:"status"`
-	OutputFiles  []compileOutputFile `json:"outputFiles"`
-	CLSIServerID string              `json:"clsiServerId"`
+	Status             string              `json:"status"`
+	OutputFiles        []compileOutputFile `json:"outputFiles"`
+	CLSIServerID       string              `json:"clsiServerId"`
+	ValidationProblems map[string]any      `json:"validationProblems"`
 }
 
 type compileOutputFile struct {
@@ -353,25 +392,120 @@ func parseCompileResponse(body []byte) (compileResponse, error) {
 	return result, nil
 }
 
-func (r compileResponse) outputPDF() compileOutputFile {
+func (r compileResponse) outputPDF() (compileOutputFile, bool) {
 	for _, file := range r.OutputFiles {
-		if file.Path == "output.pdf" || file.Type == "pdf" {
-			return file
+		if file.Path == "output.pdf" {
+			return file, true
 		}
 	}
-	return compileOutputFile{}
+	for _, file := range r.OutputFiles {
+		if file.Type == "pdf" {
+			return file, true
+		}
+	}
+	return compileOutputFile{}, false
+}
+
+func (r compileResponse) outputLog() (compileOutputFile, bool) {
+	for _, file := range r.OutputFiles {
+		if file.Path == "output.log" {
+			return file, true
+		}
+	}
+	return compileOutputFile{}, false
+}
+
+func (r compileResponse) bibliographyLogs() []compileOutputFile {
+	logs := make([]compileOutputFile, 0)
+	seen := make(map[string]struct{})
+	for _, file := range r.OutputFiles {
+		if !strings.EqualFold(path.Ext(file.Path), ".blg") {
+			continue
+		}
+		key := file.Path + "\x00" + file.URL
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		logs = append(logs, file)
+	}
+	return logs
+}
+
+func compileStatusError(result compileResponse, outputLog []byte, hasDiagnostics bool) error {
+	var message strings.Builder
+	status := strings.TrimSpace(sanitizeCompileLogLine(result.Status))
+	if status == "" {
+		status = "<missing>"
+	}
+	fmt.Fprintf(&message, "compile status is %s", status)
+	appendValidationProblems(&message, result.ValidationProblems)
+	if !hasDiagnostics {
+		if tail := compileLogTail(outputLog); tail != "" {
+			message.WriteString("\ncompile log:\n")
+			message.WriteString(tail)
+		}
+	}
+	return errors.New(message.String())
+}
+
+func appendUniqueCompileErrors(existing, candidates []domain.CompileError) []domain.CompileError {
+	seen := make(map[string]struct{}, len(existing)+len(candidates))
+	for _, diagnostic := range existing {
+		seen[compileLogDiagnosticKey(diagnostic)] = struct{}{}
+	}
+	for _, diagnostic := range candidates {
+		if len(existing) == maxCompileLogDiagnostics {
+			break
+		}
+		key := compileLogDiagnosticKey(diagnostic)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		existing = append(existing, diagnostic)
+	}
+	return existing
+}
+
+func appendValidationProblems(message *strings.Builder, problems map[string]any) {
+	keys := make([]string, 0, len(problems))
+	for key := range problems {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Fprintf(message, "\n%s: %s", sanitizeCompileLogLine(key), sanitizeCompileLogText([]byte(fmt.Sprint(problems[key]))))
+	}
+}
+
+func compileLogTail(body []byte) string {
+	const maxTailBytes = 4096
+	body = bytes.TrimSpace(body)
+	if len(body) <= maxTailBytes {
+		return sanitizeCompileLogText(body)
+	}
+	body = body[len(body)-maxTailBytes:]
+	if newline := bytes.IndexByte(body, '\n'); newline >= 0 {
+		body = body[newline+1:]
+	}
+	return "[earlier compile log omitted]\n" + sanitizeCompileLogText(body)
 }
 
 func (b *overleafBackend) downloadCompileOutput(ctx context.Context, outputURL, clsiServerID, editorID string) ([]byte, error) {
 	if outputURL == "" {
 		return nil, errors.New("output.pdf URL is missing from compile response")
 	}
-	req, err := b.newRequest(ctx, http.MethodGet, compileDownloadPath(outputURL, clsiServerID, editorID), nil)
+	downloadPath, err := b.compileDownloadPath(outputURL, clsiServerID, editorID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid output.pdf URL in compile response: %w", err)
+	}
+	req, err := b.newRequest(ctx, http.MethodGet, downloadPath, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/pdf,*/*")
-	resp, err := b.client.Do(req)
+	resp, err := b.doCompileOutputRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -386,24 +520,194 @@ func (b *overleafBackend) downloadCompileOutput(ctx context.Context, outputURL, 
 	return body, nil
 }
 
-func compileDownloadPath(outputURL, clsiServerID, editorID string) string {
+const (
+	maxCompileLogBytes         = 1 << 20
+	maxCompileLogTransferBytes = 16 << 20
+)
+
+func (b *overleafBackend) downloadCompileTextOutput(ctx context.Context, output compileOutputFile, clsiServerID, editorID string) ([]byte, error) {
+	name := sanitizeCompileLogLine(output.Path)
+	if name == "" {
+		name = "compile log"
+	}
+	if output.URL == "" {
+		return nil, fmt.Errorf("download compile log failed (%s): URL is missing from compile response", name)
+	}
+	downloadPath, err := b.compileDownloadPath(output.URL, clsiServerID, editorID)
+	if err != nil {
+		return nil, fmt.Errorf("download compile log failed (%s): invalid URL in compile response: %w", name, err)
+	}
+	req, err := b.newRequest(ctx, http.MethodGet, downloadPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("download compile log failed (%s): %w", name, err)
+	}
+	req.Header.Set("Accept", "text/plain,*/*")
+	resp, err := b.doCompileOutputRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("download compile log failed (%s): %w", name, err)
+	}
+	defer resp.Body.Close()
+	capture := newCompileLogCapture(maxCompileLogBytes)
+	_, err = io.Copy(capture, io.LimitReader(resp.Body, maxCompileLogTransferBytes+1))
+	body := capture.Bytes()
+	if err != nil {
+		return body, fmt.Errorf("download compile log failed (%s): %w", name, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download compile log failed (%s): HTTP %d: %s", name, resp.StatusCode, trimBody(body))
+	}
+	if capture.Total() > maxCompileLogTransferBytes {
+		return body, fmt.Errorf("download compile log failed: %s exceeds the %d-byte scan limit", name, maxCompileLogTransferBytes)
+	}
+	if capture.Total() > maxCompileLogBytes {
+		return body, fmt.Errorf("download compile log failed: %s exceeds %d bytes; inspected its beginning and end", name, maxCompileLogBytes)
+	}
+	return body, nil
+}
+
+type compileLogCapture struct {
+	limit int
+	total int64
+	head  []byte
+	tail  []byte
+}
+
+func newCompileLogCapture(limit int) *compileLogCapture {
+	return &compileLogCapture{limit: limit}
+}
+
+func (capture *compileLogCapture) Write(data []byte) (int, error) {
+	written := len(data)
+	capture.total += int64(written)
+	headLimit := capture.limit / 2
+	if len(capture.head) < headLimit {
+		amount := min(headLimit-len(capture.head), len(data))
+		capture.head = append(capture.head, data[:amount]...)
+		data = data[amount:]
+	}
+	if len(data) == 0 {
+		return written, nil
+	}
+	tailLimit := capture.limit - headLimit
+	if len(data) >= tailLimit {
+		capture.tail = append(capture.tail[:0], data[len(data)-tailLimit:]...)
+		return written, nil
+	}
+	if overflow := len(capture.tail) + len(data) - tailLimit; overflow > 0 {
+		copy(capture.tail, capture.tail[overflow:])
+		capture.tail = capture.tail[:len(capture.tail)-overflow]
+	}
+	capture.tail = append(capture.tail, data...)
+	return written, nil
+}
+
+func (capture *compileLogCapture) Bytes() []byte {
+	const omitted = "\n[... middle of compile log omitted ...]\n"
+	size := len(capture.head) + len(capture.tail)
+	if capture.total > int64(capture.limit) {
+		size += len(omitted)
+	}
+	body := make([]byte, 0, size)
+	body = append(body, capture.head...)
+	if capture.total > int64(capture.limit) {
+		body = append(body, omitted...)
+	}
+	body = append(body, capture.tail...)
+	return body
+}
+
+func (capture *compileLogCapture) Total() int64 {
+	return capture.total
+}
+
+func (b *overleafBackend) compileDownloadPath(outputURL, clsiServerID, editorID string) (string, error) {
 	parsed, err := url.Parse(outputURL)
 	if err != nil {
-		return outputURL
+		return "", errors.New("URL is malformed")
+	}
+	base, err := url.Parse(b.host)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", errors.New("configured Overleaf origin is invalid")
+	}
+	if parsed.User != nil || parsed.Opaque != "" {
+		return "", errors.New("URL contains unsupported authority data")
 	}
 	if parsed.IsAbs() {
-		outputURL = parsed.RequestURI()
-		parsed, _ = url.Parse(outputURL)
+		if !sameOrigin(parsed, base) {
+			return "", errors.New("URL origin does not match the configured Overleaf origin")
+		}
+	} else if parsed.Host != "" {
+		return "", errors.New("scheme-relative URLs are not accepted")
+	} else if !strings.HasPrefix(parsed.Path, "/") {
+		return "", errors.New("URL must be absolute or root-relative")
+	}
+	if parsed.Path == "" || parsed.Fragment != "" {
+		return "", errors.New("URL does not identify a compile output path")
 	}
 	query := parsed.Query()
-	if clsiServerID != "" && query.Get("clsiserverid") == "" {
-		query.Set("clsiserverid", clsiServerID)
+	if err := setCompileOutputQuery(query, "clsiserverid", clsiServerID); err != nil {
+		return "", err
 	}
-	if editorID != "" && query.Get("editorId") == "" {
-		query.Set("editorId", editorID)
+	if err := setCompileOutputQuery(query, "editorId", editorID); err != nil {
+		return "", err
 	}
 	parsed.RawQuery = query.Encode()
-	return parsed.RequestURI()
+	return parsed.RequestURI(), nil
+}
+
+func setCompileOutputQuery(query url.Values, key, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	values, exists := query[key]
+	if exists {
+		if len(values) != 1 || values[0] != expected {
+			return fmt.Errorf("URL %s does not match the compile response", key)
+		}
+		return nil
+	}
+	query.Set(key, expected)
+	return nil
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	return left != nil && right != nil &&
+		strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Host, right.Host)
+}
+
+var errCompileOutputCrossOriginRedirect = errors.New("compile output redirect changed origin")
+
+func (b *overleafBackend) doCompileOutputRequest(req *http.Request) (*http.Response, error) {
+	client := *b.client
+	configuredCheck := client.CheckRedirect
+	origin := req.URL
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if next.URL == nil || next.URL.User != nil || !sameOrigin(next.URL, origin) {
+			return errCompileOutputCrossOriginRedirect
+		}
+		if configuredCheck != nil {
+			if err := configuredCheck(next, via); err != nil {
+				return err
+			}
+			if next.URL == nil || next.URL.User != nil || !sameOrigin(next.URL, origin) {
+				return errCompileOutputCrossOriginRedirect
+			}
+			return nil
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	resp, err := client.Do(req)
+	if errors.Is(err, errCompileOutputCrossOriginRedirect) {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, errCompileOutputCrossOriginRedirect
+	}
+	return resp, err
 }
 
 func (b *overleafBackend) projectInfo(ctx context.Context) (projectInfo, entityLookup, error) {
@@ -1495,7 +1799,7 @@ func mimeType(name string) string {
 }
 
 func trimBody(body []byte) string {
-	text := strings.TrimSpace(string(body))
+	text := strings.TrimSpace(sanitizeCompileLogText(body))
 	if len(text) > 300 {
 		return text[:300] + "..."
 	}

@@ -269,6 +269,8 @@ ovl compile --output build/main.pdf main.tex
 
 `--push` を付けると、コンパイル前に通常の `ovl push` を実行します。remote 変更や conflict がある場合は push と同じく停止し、compile は実行しません。生成される PDF は push 後に保存されるため、その実行で作られた PDF 自体は push 対象になりません。
 
+コンパイル後は Overleaf の `output.log` と、返された BibTeX/Biber の `.blg` ログも取得します。LaTeX や参考文献のエラーが見つかった場合は、行番号や周辺情報を含むエラーメッセージを標準エラー出力へ表示し、非ゼロで終了します。エラーがあっても Overleaf 側で PDF が生成された場合、その PDF は指定した出力先へ保存します。
+
 PDF は生成物なので、新規プロジェクトで作られる `.olignore` には `*.pdf` を含めています。既存プロジェクトで PDF を push 対象にしたくない場合は `.olignore` に `*.pdf` を追加してください。
 
 ### `ovl push`
