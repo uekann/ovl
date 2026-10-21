@@ -37,6 +37,14 @@ type FileSnapshot struct {
 type CompileResult struct {
 	PDF    []byte
 	Status string
+	Errors []CompileError
+}
+
+type CompileError struct {
+	File    string
+	Line    int
+	Message string
+	Context string
 }
 
 type CommentThread struct {

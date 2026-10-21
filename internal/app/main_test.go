@@ -259,6 +259,32 @@ func TestCompileDownloadsPDF(t *testing.T) {
 	}
 }
 
+func TestCompileSavesPDFAndReportsLogErrors(t *testing.T) {
+	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "\\documentclass{article}\\begin{document}ok\\end{document}\n"})
+	remote.setCompileLog("! Undefined control sequence.\nl.4 \\doesnotexist\n\n")
+
+	err := Run(context.Background(), []string{"compile", "main.tex"})
+	if err == nil || !strings.Contains(err.Error(), "Undefined control sequence") || !strings.Contains(err.Error(), "line 4") {
+		t.Fatalf("expected compile diagnostic, got %v", err)
+	}
+	if got := mustRead(t, filepath.Join(project, "main.pdf")); got != "%PDF fake\n" {
+		t.Fatalf("unexpected pdf content: %q", got)
+	}
+}
+
+func TestCompileReportsLogErrorsWhenPDFCannotBeSaved(t *testing.T) {
+	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "\\documentclass{article}\\begin{document}ok\\end{document}\n"})
+	remote.setCompileLog("! Undefined control sequence.\nl.4 \\doesnotexist\n\n")
+
+	err := Run(context.Background(), []string{"compile", "--output", "main.tex/out.pdf", "main.tex"})
+	if err == nil || !strings.Contains(err.Error(), "Undefined control sequence") || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected output and compile errors, got %v", err)
+	}
+	if got := mustRead(t, filepath.Join(project, "main.tex")); !strings.Contains(got, "documentclass") {
+		t.Fatalf("main.tex was unexpectedly changed: %q", got)
+	}
+}
+
 func TestCompilePushUploadsBeforeCompile(t *testing.T) {
 	project, remote := setupSyncedProject(t, map[string]string{"main.tex": "base\n"})
 	must(t, os.WriteFile(filepath.Join(project, "main.tex"), []byte("local\n"), 0o644))
@@ -375,6 +401,7 @@ type fakeOverleaf struct {
 	mu            sync.Mutex
 	files         map[string]string
 	folders       map[string]bool
+	compileLog    string
 	ignoreDeletes bool
 	hideEntities  bool
 	deleteCalls   int
@@ -420,6 +447,18 @@ func (f *fakeOverleaf) get(path string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.files[path]
+}
+
+func (f *fakeOverleaf) setCompileLog(log string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compileLog = log
+}
+
+func (f *fakeOverleaf) getCompileLog() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.compileLog
 }
 
 func (f *fakeOverleaf) folderExists(path string) bool {
@@ -500,12 +539,14 @@ func (f *fakeOverleaf) handle(w http.ResponseWriter, r *http.Request) {
 		if payload.RootDocID != fakeID("main.tex") {
 			f.t.Fatalf("rootDoc_id = %q", payload.RootDocID)
 		}
+		outputFiles := []map[string]string{
+			{"path": "output.pdf", "url": "/project/p1/build/build-1/output/output.pdf", "type": "pdf"},
+			{"path": "output.log", "url": "/project/p1/build/build-1/output/output.log", "type": "log"},
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":       "success",
 			"clsiServerId": "clsi-1",
-			"outputFiles": []map[string]string{
-				{"path": "output.pdf", "url": "/project/p1/build/build-1/output/output.pdf", "type": "pdf"},
-			},
+			"outputFiles":  outputFiles,
 		})
 	case r.Method == http.MethodGet && r.URL.Path == "/project/p1/build/build-1/output/output.pdf":
 		if r.URL.Query().Get("clsiserverid") != "clsi-1" {
@@ -513,6 +554,12 @@ func (f *fakeOverleaf) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/pdf")
 		_, _ = io.WriteString(w, "%PDF fake\n")
+	case r.Method == http.MethodGet && r.URL.Path == "/project/p1/build/build-1/output/output.log":
+		if r.URL.Query().Get("clsiserverid") != "clsi-1" {
+			f.t.Fatalf("log clsiserverid = %q", r.URL.Query().Get("clsiserverid"))
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, f.getCompileLog())
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/project/p1/doc/"):
 		id := strings.TrimPrefix(r.URL.Path, "/project/p1/doc/")
 		f.deleteByID(id)
